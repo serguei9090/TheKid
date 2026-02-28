@@ -1,0 +1,6 @@
+{
+    "action": "ingest_file",
+    "goal": "Read Personality PDF to establish identity",
+    "target_file": "personality.md",
+    "completed": true
+}

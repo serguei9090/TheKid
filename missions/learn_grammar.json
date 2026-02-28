@@ -1,0 +1,6 @@
+{
+    "action": "ingest_file",
+    "goal": "Learn basic language letters and grammar rules.",
+    "target_file": "language_grammar.md",
+    "completed": false
+}
