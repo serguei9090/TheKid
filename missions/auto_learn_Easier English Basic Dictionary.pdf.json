@@ -1,0 +1,6 @@
+{
+    "action": "ingest_file",
+    "goal": "Autonomous learning of Easier English Basic Dictionary.pdf",
+    "target_file": "Easier English Basic Dictionary.pdf",
+    "completed": false
+}

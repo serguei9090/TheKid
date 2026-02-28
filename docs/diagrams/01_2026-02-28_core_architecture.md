@@ -29,13 +29,14 @@ flowchart TD
         %% WORKER PHASE
         W_PHASE["WORKER PHASE\n(Chat Interface)"]
         BRAIN[(synapses.rem\n4GB Relational Map)]
+        LOGGER[["trace.log (Background)"]]
         Q_SOLVED{"Found in .rem?"}
     end
 
     subgraph The_Teacher[The Teacher - Local LLM]
         OLLAMA[Ollama 3.1 8B]
-        LLM_EXTRACT["Slave Processor:\nText -> Triplets"]
-        LLM_VOCAL["Vocal Cords:\nTriplets -> Natural Chat"]
+        LLM_EXTRACT["Slave Processor:\nText -> Quadruplets"]
+        LLM_VOCAL["Vocal Cords:\nKnowledge -> Natural Chat"]
     end
 
     %% Flow Definitions
@@ -46,7 +47,7 @@ flowchart TD
     L_PHASE --> L_CHECK
     L_CHECK -->|No| EXTRACT_SRC[Read next file\nfrom /library]
     EXTRACT_SRC --> LLM_EXTRACT
-    LLM_EXTRACT -->|Returns\n$S | R | O$| BRAIN
+    LLM_EXTRACT -->|Returns\n$S | R | O | C$| BRAIN
     L_CHECK -->|Yes| D_PHASE
 
     %% Dream Flow
@@ -62,9 +63,14 @@ flowchart TD
     Q_SOLVED -->|Yes| LLM_VOCAL
     Q_SOLVED -->|No| LLM_ASK[Ask Teacher on the fly]
     LLM_ASK --> OLLAMA
-    OLLAMA -->|Save new fact| BRAIN
+    OLLAMA -->|Save new Quadruplet| BRAIN
     OLLAMA -->|Speak| W_PHASE
     LLM_VOCAL -.-> W_PHASE
+    
+    %% Logger connections
+    L_PHASE -.-> LOGGER
+    W_PHASE -.-> LOGGER
+    D_PHASE -.-> LOGGER
 
     %% Styling
     classDef greedy fill:#1c5521,stroke:#4caf50,stroke-width:2px,color:#fff;

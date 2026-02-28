@@ -22,3 +22,4 @@ dist/
 *.egg-info/
 .eggs/
 .egg
+*.pdf

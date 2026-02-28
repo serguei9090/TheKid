@@ -1,8 +1,9 @@
 import logging
 import os
 
-from dotenv import load_dotenv
 from ollama import Client
+
+from .logger import error_log
 
 load_dotenv()
 
@@ -12,6 +13,8 @@ MODEL_NAME = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
 logger = logging.getLogger(__name__)
 
 client = Client(host=OLLAMA_BASE_URL)
+teacher_lock = threading.Lock()
+
 
 def is_teacher_present() -> bool:
     """Check if Ollama server is running and accessible."""
@@ -20,47 +23,53 @@ def is_teacher_present() -> bool:
         client.ps()
         return True
     except Exception:
-        print("[ERROR] Teacher is not present (Ollama server not found).")
+        error_log("Teacher is not present (Ollama server not found).")
         return False
 
-def translate_to_triplets(text_chunk: str) -> list[str]:
+
+def translate_to_quadruplets(text_chunk: str) -> list[str]:
     """
-    Uses the Teacher to translate a chunk of text into knowledge triplets.
-    Returns a list of strings formatted as "$Subject | Relation | Object$".
+    Uses the Teacher to translate a chunk of text into knowledge quadruplets.
+    Returns a list of strings formatted as "$Subject | Relation | Object | Context$".
     """
     if not is_teacher_present():
         return []
-    
+
     prompt = f"""You are a precise relational extractor. \\
-Extract knowledge from the text into strictly formatted triplets.
-Format each extracted fact on a new line as: $Subject | Relation | Object$
-Do not include any other text, explanation, or conversational filler. Only the triplets.
+Extract knowledge from the text into strictly formatted quadruplets.
+Format each extracted fact on a new line as: $Subject | Relation | Object | Context$
+Do not include any other text, explanation, or conversational filler. Only the quadruplets.
+Context should be a single brief word like "Science", "History", "Grammar", "Identity", or "Social".
+If the text contains personality or identity traits, use the "Identity" or "Social" Context, 
+and relations like "is_named", "is", or "has".
 Extract the most important facts from the following text:
 
 TEXT:
 {text_chunk}
 """
     try:
-        response = client.generate(
-            model=MODEL_NAME,
-            prompt=prompt,
-            stream=False,
-            options={
-                "temperature": 0.1,
-            }
-        )
+        with teacher_lock:
+            response = client.generate(
+                model=MODEL_NAME,
+                prompt=prompt,
+                stream=False,
+                options={
+                    "temperature": 0.1,
+                },
+            )
         result = response.get("response", "")
-        
-        triplets = []
+
+        quads = []
         for line in result.split("\n"):
             line = line.strip()
-            if line.startswith("$") and line.endswith("$") and "|" in line:
-                triplets.append(line)
-        return triplets
+            if line.startswith("$") and line.endswith("$") and line.count("|") >= 3:
+                quads.append(line)
+        return quads
 
     except Exception as e:
-        print(f"[ERROR] Failed to communicate with Teacher during translation: {e}")
+        error_log(f"Failed to communicate with Teacher during translation: {e}")
         return []
+
 
 def vocalize(context_facts: list[str], user_input: str) -> str:
     """
@@ -81,16 +90,17 @@ USER INPUT:
 {user_input}
 """
     try:
-        response = client.generate(
-            model=MODEL_NAME,
-            prompt=prompt,
-            stream=False,
-            options={
-                "temperature": 0.7,
-            }
-        )
+        with teacher_lock:
+            response = client.generate(
+                model=MODEL_NAME,
+                prompt=prompt,
+                stream=False,
+                options={
+                    "temperature": 0.7,
+                },
+            )
         return response.get("response", "").strip()
 
     except Exception as e:
-        print(f"[ERROR] Failed to communicate with Teacher during vocalization: {e}")
+        error_log(f"Failed to communicate with Teacher during vocalization: {e}")
         return "Error: Could not speak due to Teacher unavailability."

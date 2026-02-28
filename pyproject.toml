@@ -6,7 +6,9 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "ollama>=0.6.1",
+    "pypdf>=6.7.4",
     "python-dotenv>=1.2.1",
+    "rich>=14.3.3",
 ]
 
 [tool.ruff]
