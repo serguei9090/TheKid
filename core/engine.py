@@ -3,11 +3,11 @@ import hashlib
 import os
 import re
 import sqlite3
+import sympy
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Tuple
 
 from .logger import error_log, trace_log
-from .teacher import translate_to_quadruplets
 
 DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "brain", "synapses.rem"))
 
@@ -24,6 +24,16 @@ class KidEngine:
         self.cursor.execute("PRAGMA journal_mode=WAL;")
         self._initialize_db()
         self.DELETE_QUERY = "DELETE FROM quadruplets WHERE rowid = ?"
+        self.PREFERENCE_CONTEXT = "UserPreference"
+        
+        # Pillar Schema for Prefrontal Cortex (PFC)
+        self.CORE_PILLARS = {
+            "Math": ["math", "arithmetic", "algebra", "geometry", "calculus", "calculating", "number"],
+            "Language": ["lang", "grammar", "etym", "ling", "vocab", "speech", "words", "sentence", "phonics"],
+            "Logic": ["logic", "reason", "reasoning", "deduce", "syllogism", "cause", "condition"],
+            "Social": ["social", "greet", "interaction", "empath", "identity", "relation", "conversation"],
+            "Identity": ["identity", "name", "who am i", "ali"],
+        }
 
     def _trace(self, module: str, message: str, color: str = "GRAY"):
         trace_log(module, message, color=color, show_in_console=not self.silent_trace)
@@ -87,34 +97,66 @@ class KidEngine:
         """Simple character chunking for text."""
         return [text[i : i + chunk_size] for i in range(0, len(text), chunk_size)]
 
+    def _normalize_context(self, ctx: str) -> str:
+        """PFC: Normalizes 200+ random folders into core brain pillars."""
+        ctx_lower = ctx.lower()
+        for pillar, keywords in self.CORE_PILLARS.items():
+            if any(kw in ctx_lower for kw in keywords):
+                return pillar
+        return "General"
+
+    def _verify_math_logic(self, s: str, o: str) -> bool:
+        """PFC: Sub-module for math verification using Sympy."""
+        try:
+            if any(op in s for op in "+-*/"):
+                o_val = re.search(r"[-+]?\d*\.?\d+", o)
+                if o_val:
+                    expected = float(sympy.simplify(s))
+                    actual = float(o_val.group())
+                    if abs(expected - actual) > 0.001:
+                        self._trace("PFC REJECTION", f"Math Mismatch: {s} != {o}", color="RED")
+                        return False
+        except Exception:
+            pass
+        return True
+
+    def _is_logically_valid(self, s: str, o: str, c: str) -> bool:
+        """PFC: The Gatekeeper. Validates facts before they enter storage."""
+        if len(s) > 100 or len(o) > 500: return False
+        if s.count(" ") > 10 and c == "Math": return False 
+
+        if c == "Math":
+            return self._verify_math_logic(s, o)
+        return True
+
     def store_quadruplet(self, quad_str: str, default_context: str = "General"):
-        """Stores a $Subject | Relation | Object | Context$ formatted quadruplet."""
+        """Stores a $Subject | Relation | Object | Context$ formatted quadruplet with PFC validation."""
         clean_str = quad_str.strip()
         if not (clean_str.startswith("$") and clean_str.endswith("$")):
             return
 
         parts = [p.strip() for p in clean_str[1:-1].split("|")]
-
-        # Handle fallback for older triplet formats
+        
+        # Handle format normalization
         if len(parts) == 3:
-            s, r, o = parts
-            c = default_context
+            s, r, o = parts; c = default_context
         elif len(parts) >= 4:
             s, r, o, c = parts[:4]
         else:
             return
 
+        # Phase 20: Prefrontal Cortex Gatekeeping
+        c = self._normalize_context(c)
+        if not self._is_logically_valid(s, o, c):
+            return
+
         self._trace("LEARNING", f"Saving Fact -> {s} | {r} | {o} | {c}")
-        # Insert or update occurrence
-        self.cursor.execute(
-            """
+        self.cursor.execute("""
             INSERT INTO quadruplets (subject, relation, object, context, occurrences) 
             VALUES (?, ?, ?, ?, 1)
             ON CONFLICT(subject, relation, object, context) 
             DO UPDATE SET occurrences = occurrences + 1, last_seen_at = CURRENT_TIMESTAMP
-        """,
-            (s, r, o, c),
-        )
+        """, (s, r, o, c))
 
     def ingest_file(self, file_path: str):
         """Parallel ingestion of a file's contents into the database."""
@@ -219,89 +261,54 @@ class KidEngine:
         self.conn.commit()
         self._trace("INGESTION COMPLETE", file_name, color="GREEN")
 
-    def query_brain_cra(self, keywords: List[str], current_situation: str = "General") -> List[str]:
-        """
-        Phase 2: Contextual Resonant Activation lookup. Looks for matching keywords and
-        modifies base strength via CRA math.
-        """
-        from core.math_utils import contextual_resonant_activation, spreading_activation_energy
+    def _score_single_fact(self, s, r, o, c, w, ctx, nums, now):
+        """Helper for CRA scoring."""
+        from core.math_utils import contextual_resonant_activation
+        a = contextual_resonant_activation(w, r, ctx)
+        if c.lower() == ctx.lower(): a *= 2.0
+        # Recency
+        self.cursor.execute("SELECT last_seen_at FROM quadruplets WHERE subject=? AND relation=? AND object=? AND context=?", (s, r, o, c))
+        row = self.cursor.fetchone()
+        if row and row[0]:
+            seen_dt = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+            if (now - seen_dt).total_seconds() < 60: a *= 2.0
+        # Math filter
+        if ctx == "Math":
+            subj_nums = set(re.findall(r'\d+', s))
+            if any(sn not in nums for sn in subj_nums): a *= 0.001
+        return a
 
-        if not keywords:
-            return []
+    def query_brain_cra(self, keywords: List[str], current_situation: str = "General") -> List[str]:
+        """CRA lookup with Gatekeeper scoring."""
+        from core.math_utils import spreading_activation_energy
+        if not keywords: return []
 
         query = "SELECT subject, relation, object, context, strength FROM quadruplets WHERE "
-        conditions = []
-        params = []
-
-        # Optimization: Prioritize the whole expression if it is math-like
-        expr = " ".join(keywords)
+        conditions, params, expr = [], [], " ".join(keywords)
         if any(op in expr for op in "+-*/="):
-            conditions.append("subject LIKE ?")
-            params.append(f"%{expr}%")
-
+            conditions.append("subject LIKE ?"); params.append(f"%{expr}%")
         for kw in keywords:
             conditions.append("(subject LIKE ? OR object LIKE ?)")
-            kw_param = f"%{kw}%"
-            params.extend([kw_param, kw_param])
+            p = f"%{kw}%"; params.extend([p, p])
 
-        query += " OR ".join(conditions)
-        self.cursor.execute(query, params)
+        self.cursor.execute(query + " OR ".join(conditions), params)
         results = self.cursor.fetchall()
+        nums = set(re.findall(r'\d+', expr))
+        now, scored = datetime.now(timezone.utc), []
 
-        # Phase 18: Extract numbers from input for strict validation
-        input_numbers = set()
-        for kw in keywords:
-            input_numbers.update(re.findall(r'\d+', kw))
+        for row in results:
+            s, r, o, c, w = row
+            a = self._score_single_fact(s, r, o, c, w, current_situation, nums, now)
+            if expr.replace(" ", "") == s.replace(" ", ""): a *= 20.0 # Exact match boost
+            e = spreading_activation_energy(1.0, a, decay=1.2)
+            scored.append((e, a, s, r, o, c))
 
-        # Calculate Cra Math for each result
-        scored_results = []
-        energy_source = 1.0  # Base user energy
-        
-        now = datetime.now(timezone.utc)
-
-        for s, r, o, c, w in results:
-            activation = contextual_resonant_activation(w, r, current_situation)
-            
-            # Phase 17: Context Match Multiplier
-            if c.lower() == current_situation.lower():
-                activation *= 2.0
-            
-            # Recency Boost (Freshness factor)
-            self.cursor.execute("SELECT last_seen_at FROM quadruplets WHERE subject=? AND relation=? AND object=? AND context=?", (s, r, o, c))
-            last_seen_row = self.cursor.fetchone()
-            if last_seen_row and last_seen_row[0]:
-                last_seen_dt = datetime.strptime(last_seen_row[0], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-                seconds_ago = (now - last_seen_dt).total_seconds()
-                if seconds_ago < 60: activation *= 2.0
-
-            # Phase 18: Numeric Validation Penalty
-            if current_situation == "Math":
-                fact_text = f"{s} {o}".lower()
-                fact_numbers = set(re.findall(r'\d+', fact_text))
-                # Penalize if fact contains numbers NOT in query AND NOT in the result object
-                for fn in fact_numbers:
-                    if fn not in input_numbers and fn not in o:
-                        activation *= 0.01
-
-            energy_target = spreading_activation_energy(energy_source, activation, decay=1.2)
-            scored_results.append((energy_target, activation, s, r, o, c))
-
-        # Sort by highest resonant energy
-        scored_results.sort(key=lambda x: x[0], reverse=True)
-        top_facts = scored_results[:2]  # NSCA: Singular Convergence (1 or 2 facts max)
-
+        scored.sort(key=lambda x: x[0], reverse=True)
         formatted = []
-        for e, a, s, r, o, c in top_facts:
-            # NSCA: Minimum energy threshold to avoid hallucinated garbage links
+        for e, a, s, r, o, c in scored[:2]:
             if e > 0.3:
-                # Log CRA decision trace with Energy (E) and Activation (A)
-                self._trace(
-                    "CRA Math",
-                    f"Path: [{s} -> {r} -> {o}] | Activation(A): {a:.2f} | Energy(E): {e:.2f}",
-                    color="CYAN",
-                )
+                self._trace("CRA Math", f"Path: [{s} -> {r} -> {o}] | E: {e:.2f}", color="CYAN")
                 formatted.append(f"${s} | {r} | {o} | {c}$")
-
                 # Track the last spoken fact ID for this user (default 'User')
                 self.cursor.execute(
                     "INSERT OR REPLACE INTO sessions (user_name, last_fact_id) VALUES ('User', (SELECT rowid FROM quadruplets WHERE subject=? AND relation=? AND object=? AND context=?))",
@@ -340,17 +347,39 @@ class KidEngine:
 
     def find_contradictions(self) -> List[tuple]:
         """
-        Finds quadruplets with the same subject and relation but different objects.
-        Returns a list of pairs (rowid1, rowid2).
+        Finds 'Dissonant' clusters: Same (Subject, Relation) but different (Object).
         """
         self.cursor.execute("""
             SELECT a.rowid, b.rowid, a.subject, a.relation, a.object, b.object, a.context
             FROM quadruplets a
             JOIN quadruplets b ON a.subject = b.subject AND a.relation = b.relation 
-            AND a.object != b.object AND a.context = b.context
+            AND a.object != b.object
             WHERE a.rowid < b.rowid
         """)
         return self.cursor.fetchall()
+
+    def query_graph_inference(self, keywords: List[str], depth: int = 2) -> List[str]:
+        """
+        Pillar C: Multi-Step Graph Inference (Deep Thinking).
+        A -> B -> C reasoning.
+        """
+        if depth <= 0 or not keywords: return []
+        
+        inferred = []
+        for kw in keywords:
+            self.cursor.execute(
+                "SELECT subject, relation, object, context FROM quadruplets WHERE subject LIKE ?", 
+                (f"%{kw}%",)
+            )
+            hits = self.cursor.fetchall()
+            for s, r, o, c in hits:
+                fact = f"${s} | {r} | {o} | {c}$"
+                inferred.append(fact)
+                # Recursive walk: Use Object as Subject for next level
+                sub_results = self.query_graph_inference([o], depth - 1)
+                inferred.extend(sub_results)
+        
+        return list(set(inferred))
 
     def update_link_strengths(self):
         """D. Relational Link Strength calculation."""

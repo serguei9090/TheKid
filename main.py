@@ -13,43 +13,40 @@ MISSIONS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "missions
 LIBRARY_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "library"))
 
 
+def _create_mission(rel_path: str, mission_path: str, engine: KidEngine):
+    """Helper to write mission file."""
+    trace_log("AUTONOMY", f"Discovered new knowledge: {rel_path}", color="YELLOW",
+              show_in_console=not getattr(engine, "silent_trace", False))
+    mission_data = {
+        "action": "ingest_file",
+        "goal": f"Autonomous learning of {rel_path}",
+        "target_file": rel_path,
+        "completed": False,
+    }
+    try:
+        os.makedirs(MISSIONS_DIR, exist_ok=True)
+        with open(mission_path, "w", encoding="utf-8") as f:
+            json.dump(mission_data, f, indent=4)
+    except Exception as e:
+        error_log(f"Failed to auto-generate mission for {rel_path}: {e}")
+
 def auto_generate_missions(engine: KidEngine):
-    """Scans the library for new files and automatically creates learning missions for them."""
-    if not os.path.exists(LIBRARY_DIR):
-        return
+    """Recursively scans the library for new files and creates learning missions."""
+    if not os.path.exists(LIBRARY_DIR): return
 
-    for filename in os.listdir(LIBRARY_DIR):
-        file_path = os.path.join(LIBRARY_DIR, filename)
-        if not os.path.isfile(file_path):
-            continue
+    for root, _, files in os.walk(LIBRARY_DIR):
+        for filename in files:
+            if filename.startswith("."): continue
+            file_path = os.path.join(root, filename)
+            rel_path = os.path.relpath(file_path, LIBRARY_DIR)
+            
+            if engine.is_file_ingested(engine.hash_file(file_path)): continue
 
-        # Check if already ingested using Engine's file hash tracker
-        file_hash = engine.hash_file(file_path)
-        if engine.is_file_ingested(file_hash):
-            continue
+            mission_key = rel_path.replace(os.sep, "_")
+            mission_path = os.path.join(MISSIONS_DIR, f"auto_learn_{mission_key}.json")
 
-        mission_filename = f"auto_learn_{filename}.json"
-        mission_path = os.path.join(MISSIONS_DIR, mission_filename)
-
-        if not os.path.exists(mission_path):
-            trace_log(
-                "AUTONOMY",
-                f"Discovered new knowledge source: {filename}",
-                color="YELLOW",
-                show_in_console=not getattr(engine, "silent_trace", False),
-            )
-            mission_data = {
-                "action": "ingest_file",
-                "goal": f"Autonomous learning of {filename}",
-                "target_file": filename,
-                "completed": False,
-            }
-            try:
-                os.makedirs(MISSIONS_DIR, exist_ok=True)
-                with open(mission_path, "w", encoding="utf-8") as f:
-                    json.dump(mission_data, f, indent=4)
-            except Exception as e:
-                error_log(f"Failed to auto-generate mission for {filename}: {e}")
+            if not os.path.exists(mission_path):
+                _create_mission(rel_path, mission_path, engine)
 
 
 def get_new_missions() -> list:
@@ -132,8 +129,8 @@ def execute_dream_phase(engine: KidEngine):
 
 def adjudicate_contradictions(engine: KidEngine):
     """
-    Automated Truth adjudication. Finds contradictory nodes
-    and asks the Teacher to resolve the tie.
+    Pillar A: Autonomous Truth Audit.
+    Finds conflicting nodes and uses the judicial protocol to prune lies.
     """
     contradictions = engine.find_contradictions()
     if not contradictions:
@@ -141,40 +138,32 @@ def adjudicate_contradictions(engine: KidEngine):
 
     from core.teacher import adjudicate_facts
 
-    for rid1, rid2, sub, rel, obj1, obj2, ctx in contradictions:
-        trace_log(
-            "DISSONANCE", f"Contradiction found: {sub} {rel} {obj1} vs {obj2}", color="YELLOW"
-        )
+    # Limit per loop to prevent CPU spike
+    for rid1, rid2, sub, rel, obj1, obj2, ctx in contradictions[:10]:
+        trace_log("DISSONANCE", f"Self-Audit: {sub} | {rel} | {obj1} vs {obj2}", color="YELLOW")
 
         fact_a = f"${sub} | {rel} | {obj1} | {ctx}$"
         fact_b = f"${sub} | {rel} | {obj2} | {ctx}$"
 
         decision = adjudicate_facts(fact_a, fact_b)
         winner = decision.get("winner", "BOTH")
-        reasoning = decision.get("reasoning", "")
+        reasoning = decision.get("reasoning", "No logic provided.")
         corrected = decision.get("corrected_quadruplet")
+        log_tag = "AUDIT RESOLVED"
 
         if winner == "A":
-            engine.cursor.execute(
-                "UPDATE quadruplets SET strength = MIN(2.0, strength+0.1) WHERE rowid = ?", (rid1,)
-            )
-            engine.cursor.execute(
-                "UPDATE quadruplets SET strength = strength * 0.1 WHERE rowid = ?", (rid2,)
-            )
+            engine.cursor.execute(engine.DELETE_QUERY, (rid2,))
+            trace_log(log_tag, f"Kept: {obj1} | Pruned: {obj2}. Logic: {reasoning}", color="GREEN")
         elif winner == "B":
-            engine.cursor.execute(
-                "UPDATE quadruplets SET strength = MIN(2.0, strength+0.1) WHERE rowid = ?", (rid2,)
-            )
-            engine.cursor.execute(
-                "UPDATE quadruplets SET strength = strength * 0.1 WHERE rowid = ?", (rid1,)
-            )
+            engine.cursor.execute(engine.DELETE_QUERY, (rid1,))
+            trace_log(log_tag, f"Kept: {obj2} | Pruned: {obj1}. Logic: {reasoning}", color="GREEN")
         elif winner == "NEITHER":
             engine.cursor.execute("DELETE FROM quadruplets WHERE rowid IN (?, ?)", (rid1, rid2))
-
+            trace_log(log_tag, f"Destroyed both {obj1} and {obj2}. Logic: {reasoning}", color="RED")
+        
         if corrected:
             engine.store_quadruplet(corrected)
-
-        trace_log("ADJUDICATION", f"Winner: {winner}. Reasoning: {reasoning}", color="CYAN")
+            trace_log(log_tag, f"Corrected to: {corrected}. Logic: {reasoning}", color="CYAN")
 
     engine.conn.commit()
 
@@ -264,16 +253,24 @@ def handle_teacher_query(user_input: str, engine: KidEngine) -> str:
 
 
 def process_correction(user_input: str, processed_input: str, engine: KidEngine) -> tuple[str, bool]:
-    """Processes a user correction and attempts fast-learning."""
+    """Processes a user correction and attempts fast-learning + Preference Tracking (Pillar B)."""
     engine.backpropagate_feedback(correct=False)
     
-    correction_patterns = [r"is\s+(.+)$", r"it\s+is\s+(.+)$", r"answer\s+is\s+(.+)$"]
+    # Pillar B: Implicit Preference Learning
+    # Track that the 'Father' (The User) corrected Ali on this specific topic
+    # We use 'User' as a generic name for now unless identity is known
+    pref_fact = f"$User | Prefers | Correction to {processed_input.strip()} | UserPreference$"
+    engine.store_quadruplet(pref_fact)
+    
+    # Expanded patterns to handle "4+4 = 8" or "is 8"
+    correction_patterns = [r"is\s+(.+)$", r"it\s+is\s+(.+)$", r"answer\s+is\s+(.+)$", r"=\s*(.*)$"]
     
     for pattern in correction_patterns:
         match = re.search(pattern, user_input.lower())
         if match:
             correction_value = match.group(1).strip()
             # Try to reconstruct a math fact
+            # Check processed_input (original query) for arithmetic operators
             if any(op in processed_input for op in "+-*/"):
                 expr_match = re.search(r"(\d+\s*[\+\-\*\/]\s*\d+)", processed_input)
                 if expr_match:
@@ -331,9 +328,13 @@ def process_cli_interaction(engine: KidEngine) -> bool:
 
         trace_log("SEARCHING", f"Processing CLI Request: '{user_input}'", color="CYAN")
 
-        # 1. Extraction & Retrieval
+        # 1. Extraction & Retrieval & Inference (Pillar C)
         keywords, current_situation, processed_input = extract_keywords(user_input)
         facts = engine.query_brain_cra(keywords, current_situation)
+        if not facts:
+            # Deep Thinking fallback
+            trace_log("INFERENCE", f"No shallow hits for '{keywords}'. Transitioning to Pillar C: Deep Graph Traversal...", color="BLUE")
+            facts = engine.query_graph_inference(keywords, depth=2)
         
         final_response = ""
         needs_teacher = False
@@ -414,9 +415,13 @@ def handle_client_request(client, engine: KidEngine):
         # 2. Information Extraction
         keywords, current_situation, processed_input = extract_keywords(user_input)
         
-        # 3. Brain Retrieval
+        # 3. Brain Retrieval & Inference (Pillar C)
         facts = engine.query_brain_cra(keywords, current_situation)
-        
+        if not facts:
+            # Deep Thinking fallback
+            trace_log("INFERENCE", f"No shallow hits for '{keywords}'. Transitioning to Pillar C: Deep Graph Traversal...", color="BLUE")
+            facts = engine.query_graph_inference(keywords, depth=2)
+            
         final_response = ""
         needs_teacher = False
 
@@ -445,6 +450,45 @@ def handle_client_request(client, engine: KidEngine):
         client.close()
 
 
+def execute_autonomous_audit(engine: KidEngine):
+    """
+    Pillar A: Self-Audit Mission. Ali scans his brain for conflicts
+    and uses the Judicial Protocol (Teacher) to resolve them.
+    """
+    conflicts = engine.find_contradictions()
+    if not conflicts:
+        return
+
+    from core.teacher import adjudicate_facts
+    # Limit audit to a small cluster per loop for performance
+    for id1, id2, s, r, o1, o2, context in conflicts[:5]:
+        fact_a = f"${s} | {r} | {o1} | {context}$"
+        fact_b = f"${s} | {r} | {o2} | {context}$"
+        
+        trace_log("JUDICIAL AUDIT", f"Conflict Detected on Node: {s} | {r}", color="RED")
+        decision = adjudicate_facts(fact_a, fact_b)
+        
+        winner = decision.get("winner")
+        reasoning = decision.get("reasoning", "No reasoning provided.")
+        corrected = decision.get("corrected_quadruplet")
+        log_tag = "AUDIT RESOLVED"
+
+        if winner == "A":
+            engine.cursor.execute(engine.DELETE_QUERY, (id2,))
+            trace_log(log_tag, f"Kept: {o1} | Pruned: {o2}. Reasoning: {reasoning}", color="GREEN")
+        elif winner == "B":
+            engine.cursor.execute(engine.DELETE_QUERY, (id1,))
+            trace_log(log_tag, f"Kept: {o2} | Pruned: {o1}. Reasoning: {reasoning}", color="GREEN")
+        elif corrected:
+            # Overwrite both with the corrected version from Teacher
+            engine.cursor.execute(engine.DELETE_QUERY, (id1,))
+            engine.cursor.execute(engine.DELETE_QUERY, (id2,))
+            engine.store_quadruplet(corrected)
+            trace_log(log_tag, f"Corrected to: {corrected}. Reasoning: {reasoning}", color="CYAN")
+        
+        engine.conn.commit()
+
+
 def continuous_learning_loop():
     """Runs continuously in the background to handle library drops and math logic."""
     # Isolated Engine instance for parallel SQLite execution via WAL mode
@@ -453,23 +497,14 @@ def continuous_learning_loop():
         try:
             auto_generate_missions(background_engine)
             if get_new_missions():
-                trace_log(
-                    "AUTONOMY",
-                    "Background thread executing new knowledge ingestion...",
-                    color="YELLOW",
-                    show_in_console=False,
-                )
+                trace_log("AUTONOMY", "Background thread: Executing digestion.", color="YELLOW")
                 execute_learning_phase(background_engine)
                 execute_dream_phase(background_engine)
-                trace_log(
-                    "AUTONOMY",
-                    "Background digestion complete. Matrices optimized.",
-                    color="BLUE",
-                    show_in_console=False,
-                )
             else:
-                # Idle state -> Start Curiosity (Greedy Learning)
                 execute_idle_curiosity_phase(background_engine)
+            
+            # Pillar A: Autonomous Contradiction Audit
+            adjudicate_contradictions(background_engine)
 
         except Exception as e:
             error_log(f"Background thread crashed but catching internally: {e}")

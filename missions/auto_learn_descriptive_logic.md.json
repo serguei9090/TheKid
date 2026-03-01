@@ -1,6 +1,0 @@
-{
-    "action": "ingest_file",
-    "goal": "Autonomous learning of descriptive_logic.md",
-    "target_file": "descriptive_logic.md",
-    "completed": true
-}

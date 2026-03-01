@@ -1,6 +1,0 @@
-{
-    "action": "ingest_file",
-    "goal": "Autonomous learning of grammar-rules.pdf",
-    "target_file": "grammar-rules.pdf",
-    "completed": true
-}

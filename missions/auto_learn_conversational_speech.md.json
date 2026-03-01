@@ -1,6 +1,0 @@
-{
-    "action": "ingest_file",
-    "goal": "Autonomous learning of conversational_speech.md",
-    "target_file": "conversational_speech.md",
-    "completed": true
-}

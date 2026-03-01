@@ -1,6 +1,0 @@
-{
-    "action": "ingest_file",
-    "goal": "Autonomous learning of functional_dialogue.md",
-    "target_file": "functional_dialogue.md",
-    "completed": true
-}

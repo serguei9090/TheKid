@@ -28,6 +28,13 @@ def _get_identity_sentence(clean_relation: str, obj: str) -> str:
         return "I am indeed your neuro-symbolic specialist."
     return f"I {clean_relation} {obj}."
 
+def _get_math_sentence(subject: str, relation: str, obj: str) -> str:
+    """Concise synthesis for Math facts."""
+    clean_relation = relation.replace("_", " ").lower()
+    if any(r in clean_relation for r in ["equals", "=", "is", "sum", "total"]):
+        return f"{subject} is {obj}."
+    return f"{subject} {clean_relation} {obj}."
+
 def _get_logic_sentence(subject: str, clean_relation: str, obj: str) -> str:
     """Synthesis for causal and logical connections."""
     if any(r in clean_relation for r in ["leads to", "causes", "because"]):
@@ -48,8 +55,12 @@ def _synthesize_fact(subject: str, relation: str, obj: str, context: str) -> str
     if "ali" in subject.lower() or "ali" in obj.lower() or context.lower() == "identity":
         return _get_identity_sentence(clean_relation, obj)
 
-    # 2. Causality & Logic
-    logic_words = ["leads to", "causes", "because", "requires", "condition", "contrasts", "opposite", "adds to", "also"]
+    # 2. Math (Concise & Authoritative)
+    if context.lower() == "math":
+        return _get_math_sentence(subject, clean_relation, obj)
+
+    # 3. Causality & Logic
+    logic_words = ["leads to", "causes", "distributive", "property", "rule", "because", "requires", "condition", "contrasts", "opposite", "adds to", "also"]
     if any(rw in clean_relation for rw in logic_words):
         return _get_logic_sentence(subject, clean_relation, obj)
 

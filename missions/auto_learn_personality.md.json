@@ -1,6 +1,0 @@
-{
-    "action": "ingest_file",
-    "goal": "Autonomous learning of personality.md",
-    "target_file": "personality.md",
-    "completed": true
-}

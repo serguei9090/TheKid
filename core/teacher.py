@@ -162,15 +162,20 @@ def adjudicate_facts(fact_a: str, fact_b: str) -> dict:
     if not is_teacher_present():
         return {"winner": "BOTH", "reasoning": "Teacher absent.", "corrected_quadruplet": None}
 
-    prompt = f"""You are a logical adjudicator. Two conflicting facts have been found in a knowledge base.
+    prompt = f"""You are a logical adjudicator for the AI 'Ali'. 
+Two conflicting facts have been found in Ali's memory.
 FACT A: {fact_a}
 FACT B: {fact_b}
 
-Analyze which fact is more likely to be true for a Grade 1 level understanding of the world.
-Respond in JSON format:
+CRITICAL RULES:
+1. MATH IS A CONSTANT: Mathematical truths (e.g. 4+4=8) are absolute. Any fact violating basic arithmetic is FALSE.
+2. IDENTITY: Ali is a neuro-symbolic assistant. Facts about his name should be immutable.
+3. ADJUDICATE: Compare the strengths and logical validity. If one is a math calculation and is incorrect, prune it immediately.
+
+Respond strictly in JSON format:
 {{
   "winner": "A" or "B" or "NEITHER" or "BOTH",
-  "reasoning": "brief explanation",
+  "reasoning": "brief explanation based on logical constants",
   "corrected_quadruplet": "$Subject | Relation | Object | Context$" or null
 }}
 """
