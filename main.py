@@ -186,10 +186,15 @@ def get_user_context(user_input: str) -> str:
     if len(user_input.split()) > 10 or "why" in user_input.lower() or "how" in user_input.lower():
         return "Teaching"
 
-    # Defaulting to 'First Meeting' logic for prototypes when identity is queried
-    if "hi" in user_input.lower() or "who" in user_input.lower():
-        return "First Meeting"
-    return "Social"
+    # Identity Routing (Phase 17)
+    identity_keywords = ["who", "name", "who are you", "what is your name", "your name"]
+    if any(ik in user_input.lower() for ik in identity_keywords):
+        return "Identity"
+    
+    if "hi" in user_input.lower() or "hello" in user_input.lower() or "hey" in user_input.lower():
+        return "Social"
+
+    return "General"
 
 
 def execute_idle_curiosity_phase(engine: KidEngine):
@@ -294,15 +299,15 @@ def execute_worker_phase(engine: KidEngine):
                     f"Structural Dissonance triggered -> {current_situation}",
                     color="YELLOW",
                 )
-            elif current_situation == "First Meeting":
+            elif current_situation == "Identity":
                 trace_log(
                     "CONTEXT SWITCH",
-                    f"First Contact detected -> {current_situation}",
+                    f"Identity query detected -> {current_situation}",
                     color="YELLOW",
                 )
                 # GUARDRAIL: Injecting identity words directly into the solver to avoid
                 # general dictionary matches pulling completely wrong data
-                keywords.extend(["is_named", "identity", "am", "name"])
+                keywords.extend(["is_named", "identity", "am", "name", "Ali"])
 
             facts = engine.query_brain_cra(keywords, current_situation)
 
@@ -325,16 +330,16 @@ def execute_worker_phase(engine: KidEngine):
                         "ALGORITHMIC VOCAL CORDS", f"Synthesizing {len(facts)} internal facts."
                     )
                     response = generate_sentence(facts)
-                    print(f"THE KID: {response}")
+                    print(f"ALI: {response}")
                     # Reinforce the fact we just told the user (implicit positive feedback)
                     engine.backpropagate_feedback(correct=True)
 
             needs_teacher = False
             if not facts:
-                print("THE KID: I don't know that yet, let me ask my Teacher.")
+                print("ALI: I don't know that yet, let me ask my Teacher.")
                 needs_teacher = True
             elif any(w in user_input.lower() for w in ["explain", "meaning", "learn", "better"]):
-                print("THE KID: *Thinking... I should learn more about this from my Teacher.*")
+                print("ALI: *Thinking... I should learn more about this from my Teacher.*")
                 needs_teacher = True
 
             if needs_teacher:
@@ -433,8 +438,8 @@ def handle_client_request(client, engine: KidEngine):
         if not keywords and raw_kws: keywords = raw_kws
         
         current_situation = get_user_context(user_input)
-        if current_situation == "First Meeting":
-            keywords.extend(["is_named", "identity", "am", "name"])
+        if current_situation == "Identity":
+            keywords.extend(["is_named", "identity", "am", "name", "Ali"])
 
         # 2. Brain Retrieval (CRA Math)
         facts = engine.query_brain_cra(keywords, current_situation)
@@ -451,10 +456,10 @@ def handle_client_request(client, engine: KidEngine):
         else:
             if facts:
                 response_text = generate_sentence(facts)
-                final_response = f"THE KID: {response_text}"
+                final_response = f"ALI: {response_text}"
                 engine.backpropagate_feedback(correct=True)
             else:
-                final_response = "THE KID: I don't know that yet, let me ask my Teacher."
+                final_response = "ALI: I don't know that yet, let me ask my Teacher."
                 needs_teacher = True
 
         # 4. Teacher Fallback (Background/Proactive)
@@ -510,7 +515,7 @@ def continuous_learning_loop():
 
 def main_loop():
     clear_trace_log()
-    trace_log("SYSTEM START", "The Kid is awake.", color="MAGENTA")
+    trace_log("SYSTEM START", "Ali is awake.", color="MAGENTA")
 
     # Launch purely biological parallel background processing (Breathing / Reading)
     learning_thread = threading.Thread(target=continuous_learning_loop, daemon=True)

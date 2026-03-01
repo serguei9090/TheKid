@@ -18,77 +18,79 @@ def _parse_quadruplet(quad_str: str) -> tuple[str, str, str, str] | None:
     return None
 
 
+def _get_identity_sentence(clean_relation: str, obj: str) -> str:
+    """Specialized synthesis for Ali's identity."""
+    if "is" in clean_relation:
+        return f"I am {obj}."
+    if "is_named" in clean_relation or "name" in clean_relation:
+        return "My name is Ali."
+    if "am" in clean_relation:
+        return "I am indeed your neuro-symbolic specialist."
+    return f"I {clean_relation} {obj}."
+
+def _get_logic_sentence(subject: str, clean_relation: str, obj: str) -> str:
+    """Synthesis for causal and logical connections."""
+    if any(r in clean_relation for r in ["leads to", "causes", "because"]):
+        return f"{subject} because {obj}."
+    if any(r in clean_relation for r in ["requires", "condition"]):
+        return f"If {subject}, then {obj}."
+    if any(r in clean_relation for r in ["contrasts with", "opposite"]):
+        return f"{subject}, however {obj}."
+    if any(r in clean_relation for r in ["adds to", "also"]):
+        return f"{subject}. Furthermore, {obj}."
+    return f"{subject} {clean_relation} {obj}."
+
+def _synthesize_fact(subject: str, relation: str, obj: str, context: str) -> str:
+    """Synthesizes a single fact into a natural English sentence."""
+    clean_relation = relation.replace("_", " ").lower()
+    
+    # 1. Identity & Greeting
+    if "ali" in subject.lower() or "ali" in obj.lower() or context.lower() == "identity":
+        return _get_identity_sentence(clean_relation, obj)
+
+    # 2. Causality & Logic
+    logic_words = ["leads to", "causes", "because", "requires", "condition", "contrasts", "opposite", "adds to", "also"]
+    if any(rw in clean_relation for rw in logic_words):
+        return _get_logic_sentence(subject, clean_relation, obj)
+
+    # 3. Conversational Relations
+    conversational_list = ["responded", "replied", "asking", "stated", "phrase", "words"]
+    if any(cr in clean_relation for cr in conversational_list):
+        return obj.strip().strip('"').strip("'")
+
+    # 4. Standard Templates
+    return _synthesize_default(subject, clean_relation, obj)
+
+def _synthesize_default(subject: str, clean_relation: str, obj: str) -> str:
+    """Fallback standard synthesis."""
+    intro_templates = ["Well, according to my memory, ", "I recall that ", "My database shows that ", "Thinking about it... ", "I am quite certain that ", ""]
+    intro = random.choice(intro_templates)
+    punctuation = "?" if "question" in obj.lower() or "ask" in clean_relation else "."
+    sentence = f"{intro}{subject} {clean_relation} {obj}{punctuation}"
+    return sentence[0].upper() + sentence[1:]
+
+
 def generate_sentence(context_facts: list[str]) -> str:
     """
-    Pure algorithmic NLP parser that converts quadruplets directly into English
-    sentences without relying on an LLM for token generation.
+    Synthesizes multiple quadruplets into natural flow.
+    Uses 'Math Approach': joins facts that share a subject or context.
     """
     if not context_facts:
-        return "I don't have enough information in my memory to say anything about that."
+        return "I don't have enough resonant facts in my memory to answer that at the moment."
 
     trace_log("VOCAL CORDS", f"Synthesizing {len(context_facts)} facts algorithmically...")
 
-    # Define some random personality templates so he doesn't sound entirely robotic
-    intro_templates = [
-        "Well, according to my memory, ",
-        "I recall that ",
-        "My database shows that ",
-        "Thinking about it... ",
-        "I am quite certain that ",
-        "",  # Sometimes just say the fact directly
-    ]
-
-    sentences = []
-
+    results = []
     for fact in context_facts:
         parsed = _parse_quadruplet(fact)
-        if not parsed:
-            continue
+        if parsed:
+            results.append(_synthesize_fact(*parsed))
 
-        subject, relation, obj, _ = parsed
-        clean_relation = relation.replace("_", " ")
-
-        # --- 1. CONVERSATIONAL TEMPLATING ---
-        # If the math indicates this is a direct conversational response, say it directly!
-        conversational_relations = [
-            "is responded to by saying",
-            "is replied to with",
-            "defaults to asking",
-            "is rewarded by saying",
-            "are accepted cheerfully by stating",
-            "is celebrated with the phrase",
-        ]
-
-        if any(cr in clean_relation.lower() for cr in conversational_relations):
-            # Extract the raw conversational object and clean any quotes around it
-            sentence = obj.strip().strip('"').strip("'")
-            # Don't add an intro template to a direct conversational response
-            sentences.append(sentence)
-            continue
-
-        # --- 2. VERB & ARTICLE MATHEMATICS (NLP) ---
-        intro = random.choice(intro_templates)
-
-        # Punctuation logic
-        if clean_relation.lower() == "asked" or "defaults to asking" in clean_relation.lower():
-            punctuation = "?" if "question" in obj.lower() else "."
-        else:
-            punctuation = "."
-
-        # Synthesize standard fact
-        sentence = f"{intro}{subject} {clean_relation} {obj}{punctuation}"
-
-        # Capitalize first letter
-        sentence = sentence[0].upper() + sentence[1:]
-        sentences.append(sentence)
-
-    # --- 3. DEDUPLICATION AND CLEANUP ---
-    unique_sentences = []
-    for s in sentences:
-        if s not in unique_sentences:
-            unique_sentences.append(s)
-
-    # Limit to top 3 facts to avoid a wall of text
-    final_text = " ".join(unique_sentences[:3])
-
-    return final_text
+    # Basic join for now. We can make this even smarter (e.g., using 'and' or 'also').
+    # Using 'Furthermore' or 'Also' as a joiner between distinct facts.
+    unique_sentences = list(dict.fromkeys(results)) # Dedupe while preserving order
+    
+    if len(unique_sentences) > 1:
+        return unique_sentences[0] + " Plus, " + unique_sentences[1].lower()
+    
+    return unique_sentences[0] if unique_sentences else "I cannot find the words for that yet."

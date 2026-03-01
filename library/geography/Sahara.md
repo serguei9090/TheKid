@@ -1,0 +1,31 @@
+# Sahara
+*Context: Geography, Educational, Reference*
+
+## Summary
+The Sahara (, ) is a desert spanning across North Africa. With an area of 9,200,000 square kilometres (3,600,000 sq mi), it is the largest hot desert in the world and the third-largest desert overall, smaller only than the deserts of Antarctica and the northern Arctic.
+The name "Sahara" is derived from Arabic: صَحَارَى, romanized: ṣaḥārā /sˤaħaːraː/, a broken plural form of ṣaḥrā' (صَحْرَاء /sˤaħraːʔ/), meaning "desert".
+The desert covers much of North Africa, excluding the fertile region on the Mediterranean Sea coast, the Atlas Mountains of the Maghreb, and the Nile Valley in Egypt and the Sudan.
+It stretches from the Red Sea in the east and the Mediterranean in the north to the Atlantic Ocean in the west, where the landscape gradually changes from desert to coastal plains. To the south it is bounded by the Sahel, a belt of semi-arid tropical savanna around the Niger River valley and the Sudan region of sub-Saharan Africa. The Sahara can be divided into several regions, including the western Sahara, the central Ahaggar Mountains, the Tibesti Mountains, the Aïr Mountains, the Ténéré desert, and the Libyan Desert.
+For several hundred thousand years, the Sahara has alternated between desert and savanna grassland in a 20,000-year cycle caused by the precession of Earth's axis (about 26,000 years) as it rotates around the Sun, which changes the location of the North African monsoon.
+
+## Core Facts
+The Sahara (, ) is a desert spanning across North Africa. With an area of 9,200,000 square kilometres (3,600,000 sq mi), it is the largest hot desert in the world and the third-largest desert overall, smaller only than the deserts of Antarctica and the northern Arctic.
+The name "Sahara" is derived from Arabic: صَحَارَى, romanized: ṣaḥārā /sˤaħaːraː/, a broken plural form of ṣaḥrā' (صَحْرَاء /sˤaħraːʔ/), meaning "desert".
+The desert covers much of North Africa, excluding the fertile region on the Mediterranean Sea coast, the Atlas Mountains of the Maghreb, and the Nile Valley in Egypt and the Sudan.
+It stretches from the Red Sea in the east and the Mediterranean in the north to the Atlantic Ocean in the west, where the landscape gradually changes from desert to coastal plains. To the south it is bounded by the Sahel, a belt of semi-arid tropical savanna around the Niger River valley and the Sudan region of sub-Saharan Africa. The Sahara can be divided into several regions, including the western Sahara, the central Ahaggar Mountains, the Tibesti Mountains, the Aïr Mountains, the Ténéré desert, and the Libyan Desert.
+For several hundred thousand years, the Sahara has alternated between desert and savanna grassland in a 20,000-year cycle caused by the precession of Earth's axis (about 26,000 years) as it rotates around the Sun, which changes the location of the North African monsoon.
+
+
+== Geography ==
+
+The Sahara covers large parts of Algeria, Chad, Egypt, Libya, Mali, Mauritania, Niger, Western Sahara and Sudan, and parts of southern Morocco and Tunisia. It covers 9 million square kilometres (3,500,000 sq mi), 31% of the African continent. If all areas with a mean annual precipitation of less than 250 mm (9.8 in) were included, the Sahara would be 11 million square kilometres (4,200,000 sq mi). It is one of three distinct physiographic provinces of the African massive physiographic division. The Sahara is so large and bright that, in theory, it could be detected from other stars as a surface feature of Earth, with near-current technology.
+The Sahara is mainly rocky hamada (stone plateaus); ergs (sand seas – large areas covered with sand dunes) form only a minor part, contrary to common misconception, but many of the sand dunes are over 180 metres (590 ft) high. Wind or rare rainfall shape the desert features: sand dunes, dune fields, sand seas, stone plateaus, gravel plains (reg), dry valleys (wadi), dry lakes (oued), and salt flats (shatt or chott). Unusual landforms include the Richat Structure in Mauritania.
+Several deeply dissected mountains, many volcanic, rise from the desert, including the Aïr Mountains, Ahaggar Mountains, Saharan Atlas, Tibesti Mountains, Adrar des Iforas, and the Red Sea Hills. The highest peak in the Sahara is Emi Koussi, a shield volcano in the Tibesti range of northern Chad.
+The central Sahara is hyperarid, with sparse vegetation. The northern and southern reaches of the desert, along with the highlands, have areas of sparse grassland and desert shrub, with trees and taller shrubs in wadis, where moisture collects. In the central, hyperarid region, there are many subdivisions: Tanezrouft, the Ténéré, the Libyan Desert, the Eastern Desert, the Nubian Desert and others. These extremely arid areas often receive no rain for years.
+To the north, the Sahara skirts the Mediterranean Sea in Egypt and portions of Libya, but in Cyrenaica and the Maghreb, the Sahara borders the Mediterranean forest, woodland, and scrub eco-regions of northern Africa, all of which have a Mediterranean climate characterized by hot summers and cool and rainy winters. According to the botanical criteria of Frank White and geographer Robert Capot-Rey, the northern limit of the Sahara corresponds to the northern limit of date palm cultivation and the southern limit of the range of esparto, a grass typical of the Mediterranean climate portion of the Maghreb and Iberia. The northern limit also corresponds to the 100 mm (3.9 in) isohyet of annual precipitation.
+To the south, the Sahara is bounded by the Sahel, a belt of dry tropical savanna with a summer rainy season that extends across Africa from east to west. The southern limit of the Sahara is indicated botanically by the southern limit of Cornulaca monacantha (a drought-tolerant member of the Chenopodiaceae), or northern limit of Cenchrus biflorus, a grass typical of the Sahel. According to climatic criteria, the southern limit of the Sahara corresponds to the 150 mm (5.9 in) isohyet of annual precipitation (this is a long-term average, since precipitation varies annually).
+Important cities located in the Sahara include Nouakchott, the capital of Mauritania; Tamanrasset, Ouargla, Béchar, Hassi Messaoud, Ghardaïa, and El Oued in Algeria; Timbuktu in Mali; Agadez in Niger; Ghat in Libya; and Faya-Largeau in Chad.
+
+
+== Climate ==
+

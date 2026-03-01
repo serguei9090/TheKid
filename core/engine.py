@@ -245,6 +245,12 @@ class KidEngine:
 
         for s, r, o, c, w in results:
             activation = contextual_resonant_activation(w, r, current_situation)
+            
+            # Phase 17: Context Match Multiplier
+            # If the fact's metadata context matches the current situation, boost resonance
+            if c.lower() == current_situation.lower():
+                activation *= 1.5
+            
             energy_target = spreading_activation_energy(energy_source, activation, decay=1.5)
             scored_results.append((energy_target, activation, s, r, o, c))
 

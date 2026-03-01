@@ -64,6 +64,14 @@ Do not include any other text, explanation, or conversational filler. Only the q
 Context should be a single brief word like "Science", "History", "Grammar", "Identity", or "Social".
 If the text contains personality or identity traits, use the "Identity" or "Social" Context, 
 and relations like "is_named", "is", or "has".
+
+***ADVANCED LOGIC INSTRUCTIONS***
+If the text contains compound reasoning, use the following Relations and Contexts:
+- Causality (because, therefore): $Fact A | leads_to | Fact B | Causality$
+- Conditionality (if, then, unless): $Condition A | requires | Condition B | Conditionality$
+- Contrast (however, although): $Fact A | contrasts_with | Fact B | Contrast$
+- Addition (furthermore, moreover): $Fact A | adds_to | Fact B | Addition$
+
 Extract the most important facts from the following text:
 
 TEXT:
