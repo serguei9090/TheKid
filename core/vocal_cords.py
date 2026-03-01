@@ -28,6 +28,30 @@ def _get_identity_sentence(clean_relation: str, obj: str) -> str:
         return "I am indeed your neuro-symbolic specialist."
     return f"I {clean_relation} {obj}."
 
+def _apply_template_resonance(template: str) -> str:
+    """Fills in Template Resonance variables dynamically without an LLM."""
+    from datetime import datetime
+    
+    current_time = datetime.now()
+    time_str = current_time.strftime("%I:%M %p")
+    hour = current_time.hour
+    
+    if hour < 12:
+        greeting = "Good morning"
+    elif hour < 17:
+        greeting = "Good afternoon"
+    else:
+        greeting = "Good evening"
+
+    # Assume user name is "User" or we could pull from the session later.
+    result = template.strip().strip('"').strip("'")
+    result = result.replace("[User_Name]", "User")
+    result = result.replace("[Time_of_Day]", time_str)
+    result = result.replace("[Current_Mission]", "building our neural graph")
+    result = result.replace("Good morning", greeting) # Optional auto-correction
+    
+    return result
+
 def _get_math_sentence(subject: str, relation: str, obj: str) -> str:
     """Concise synthesis for Math facts."""
     clean_relation = relation.replace("_", " ").lower()
@@ -51,6 +75,10 @@ def _synthesize_fact(subject: str, relation: str, obj: str, context: str) -> str
     """Synthesizes a single fact into a natural English sentence."""
     clean_relation = relation.replace("_", " ").lower()
     
+    # 0. Template Resonance (Pillar A)
+    if "template" in clean_relation or ("[" in obj and "]" in obj):
+        return _apply_template_resonance(obj)
+
     # 1. Identity & Greeting
     if "ali" in subject.lower() or "ali" in obj.lower() or context.lower() == "identity":
         return _get_identity_sentence(clean_relation, obj)
@@ -95,7 +123,11 @@ def generate_sentence(context_facts: list[str]) -> str:
     for fact in context_facts:
         parsed = _parse_quadruplet(fact)
         if parsed:
-            results.append(_synthesize_fact(*parsed))
+            synth = _synthesize_fact(*parsed)
+            # If the fact itself was a template, don't concatenate it with other random facts
+            if "template" in parsed[1].lower() or ("[" in parsed[2] and "]" in parsed[2]):
+                return synth
+            results.append(synth)
 
     # Basic join for now. We can make this even smarter (e.g., using 'and' or 'also').
     # Using 'Furthermore' or 'Also' as a joiner between distinct facts.

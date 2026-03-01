@@ -15,8 +15,12 @@ LIBRARY_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "library")
 
 def _create_mission(rel_path: str, mission_path: str, engine: KidEngine):
     """Helper to write mission file."""
-    trace_log("AUTONOMY", f"Discovered new knowledge: {rel_path}", color="YELLOW",
-              show_in_console=not getattr(engine, "silent_trace", False))
+    trace_log(
+        "AUTONOMY",
+        f"Discovered new knowledge: {rel_path}",
+        color="YELLOW",
+        show_in_console=not getattr(engine, "silent_trace", False),
+    )
     mission_data = {
         "action": "ingest_file",
         "goal": f"Autonomous learning of {rel_path}",
@@ -30,17 +34,21 @@ def _create_mission(rel_path: str, mission_path: str, engine: KidEngine):
     except Exception as e:
         error_log(f"Failed to auto-generate mission for {rel_path}: {e}")
 
+
 def auto_generate_missions(engine: KidEngine):
     """Recursively scans the library for new files and creates learning missions."""
-    if not os.path.exists(LIBRARY_DIR): return
+    if not os.path.exists(LIBRARY_DIR):
+        return
 
     for root, _, files in os.walk(LIBRARY_DIR):
         for filename in files:
-            if filename.startswith("."): continue
+            if filename.startswith("."):
+                continue
             file_path = os.path.join(root, filename)
             rel_path = os.path.relpath(file_path, LIBRARY_DIR)
-            
-            if engine.is_file_ingested(engine.hash_file(file_path)): continue
+
+            if engine.is_file_ingested(engine.hash_file(file_path)):
+                continue
 
             mission_key = rel_path.replace(os.sep, "_")
             mission_path = os.path.join(MISSIONS_DIR, f"auto_learn_{mission_key}.json")
@@ -160,12 +168,13 @@ def adjudicate_contradictions(engine: KidEngine):
         elif winner == "NEITHER":
             engine.cursor.execute("DELETE FROM quadruplets WHERE rowid IN (?, ?)", (rid1, rid2))
             trace_log(log_tag, f"Destroyed both {obj1} and {obj2}. Logic: {reasoning}", color="RED")
-        
+
         if corrected:
             engine.store_quadruplet(corrected)
             trace_log(log_tag, f"Corrected to: {corrected}. Logic: {reasoning}", color="CYAN")
 
-    engine.conn.commit()
+        # Commit per adjudication so the background process doesn't lock SQLite for 10 seconds.
+        engine.conn.commit()
 
 
 def get_user_context(user_input: str) -> str:
@@ -180,10 +189,10 @@ def get_user_context(user_input: str) -> str:
     identity_keywords = ["who", "name", "who are you", "what is your name", "your name"]
     if any(ik in user_input.lower() for ik in identity_keywords):
         return "Identity"
-    
+
     # Math Routing (Phase 18)
     # Check for numbers and math symbols
-    if re.search(r'\d+', user_input) and any(op in user_input for op in "+-*/="):
+    if re.search(r"\d+", user_input) and any(op in user_input for op in "+-*/="):
         return "Math"
 
     if "hi" in user_input.lower() or "hello" in user_input.lower() or "hey" in user_input.lower():
@@ -197,74 +206,114 @@ def extract_keywords(user_input: str) -> tuple[list[str], str, str]:
     processed_input = user_input.replace("?", "").replace(".", "")
     for char in "+-*/=":
         processed_input = processed_input.replace(char, f" {char} ")
-    
+
     raw_kws = [kw for kw in processed_input.split() if len(kw) > 0]
-    
-    stop_words = {"are", "is", "the", "a", "an", "am", "of", "to", "in", "it", "that", "this", "my", "your", "for", "do", "how", "what", "where", "when", "why", "you"}
+
+    stop_words = {
+        "are",
+        "is",
+        "the",
+        "a",
+        "an",
+        "am",
+        "of",
+        "to",
+        "in",
+        "it",
+        "that",
+        "this",
+        "my",
+        "your",
+        "for",
+        "do",
+        "how",
+        "what",
+        "where",
+        "when",
+        "why",
+        "you",
+    }
     keywords = [kw for kw in raw_kws if kw.lower() not in stop_words]
-    if not keywords and raw_kws: keywords = raw_kws
-    
+    if not keywords and raw_kws:
+        keywords = raw_kws
+
     current_situation = get_user_context(user_input)
     if current_situation == "Identity":
         keywords.extend(["is_named", "identity", "am", "name", "Ali"])
     elif current_situation == "Math":
         # Specific Extraction for Math (Phase 18)
         # We look for the arithmetic pattern and put it at the start as a single keyword
-        math_match = re.search(r'(\d+\s*[\+\-\*\/]\s*\d+)', processed_input)
+        math_match = re.search(r"(\d+\s*[\+\-\*\/]\s*\d+)", processed_input)
         if math_match:
             # We put the whole expression as the first keyword, and individual numbers after
             expr = math_match.group(1).strip()
             # Remove spaces for tighter matching
             keywords = [expr, expr.replace(" ", "")] + keywords
-        
+    elif current_situation == "Social":
+        # Template Resonance mapping for fast non-LLM responses
+        lower_input = user_input.lower()
+        if any(w in lower_input for w in ["bye", "goodbye", "later", "see you"]):
+            keywords.extend(["parting", "template"])
+        elif any(w in lower_input for w in ["right", "correct", "agree", "yes"]):
+            keywords.extend(["agreement", "template", "confirmation"])
+        elif any(w in lower_input for w in ["hello", "hi", "hey", "morning", "evening"]):
+            keywords.extend(["greeting", "template", "casual"])
+
     return keywords, current_situation, processed_input
 
 
 def handle_teacher_query(user_input: str, engine: KidEngine) -> str:
     """ALI'S GOLD-FISH FIX: Actually ask teacher and INGEST the knowledge"""
     trace_log("TEACHER", f"Ali is asking teacher for: {user_input}...", color="YELLOW")
-    
+
     prompt = (
         f"You are a Teacher assisting Ali. Provide a concise answer to: '{user_input}'.\n"
         "Then, format the core knowledge into strictly formatted $Subject | Relation | Object | Context$ quadruplets.\n"
         "Use the 'Math' context for calculations, or 'Social' for conversation."
     )
-    
+
     from core.teacher import MODEL_NAME, ollama_client, teacher_lock, translate_to_quadruplets
+
     try:
         with teacher_lock:
             resp = ollama_client.generate(model=MODEL_NAME, prompt=prompt, stream=False)
-        
+
         full_response = resp.get("response", "")
-        
+
         # Extract and Store for Future Memory (ALI LEARNS HERE)
         new_quads = translate_to_quadruplets(full_response)
         if new_quads:
             for quad in new_quads:
                 engine.store_quadruplet(quad)
             engine.conn.commit()
-            trace_log("LEARNING", f"Ali just learned {len(new_quads)} new facts about this!", color="GREEN")
-        
+            trace_log(
+                "LEARNING",
+                f"Ali just learned {len(new_quads)} new facts about this!",
+                color="GREEN",
+            )
+
         return f"TEACHER: {full_response.split('$')[0].strip()}"
-        
+
     except Exception as e:
         error_log(f"Teacher ingestion failed: {e}")
         return "ALI: I am having trouble connecting to my Teacher right now."
 
 
-def process_correction(user_input: str, processed_input: str, engine: KidEngine) -> tuple[str, bool]:
+def process_correction(
+    user_input: str, processed_input: str, engine: KidEngine
+) -> tuple[str, bool]:
     """Processes a user correction and attempts fast-learning + Preference Tracking (Pillar B)."""
     engine.backpropagate_feedback(correct=False)
-    
+
     # Pillar B: Implicit Preference Learning
     # Track that the 'Father' (The User) corrected Ali on this specific topic
     # We use 'User' as a generic name for now unless identity is known
     pref_fact = f"$User | Prefers | Correction to {processed_input.strip()} | UserPreference$"
     engine.store_quadruplet(pref_fact)
-    
+
     # Expanded patterns to handle "4+4 = 8" or "is 8"
     correction_patterns = [r"is\s+(.+)$", r"it\s+is\s+(.+)$", r"answer\s+is\s+(.+)$", r"=\s*(.*)$"]
-    
+
     for pattern in correction_patterns:
         match = re.search(pattern, user_input.lower())
         if match:
@@ -279,8 +328,11 @@ def process_correction(user_input: str, processed_input: str, engine: KidEngine)
                     engine.store_quadruplet(new_fact)
                     engine.conn.commit()
                     trace_log("FAST LEARNING", f"Intercepted correction: {new_fact}", color="GREEN")
-                    return f"THE KID: I am sorry. I have updated my memory. It is indeed {correction_value}.", False
-    
+                    return (
+                        f"THE KID: I am sorry. I have updated my memory. It is indeed {correction_value}.",
+                        False,
+                    )
+
     return "THE KID: I am sorry. I have adjusted my memory based on your correction.", True
 
 
@@ -294,8 +346,9 @@ def execute_idle_curiosity_phase(engine: KidEngine):
     random_concept = result[0] if result else None
 
     from core.teacher import proactive_inquiry
+
     mission = proactive_inquiry(random_concept)
-    
+
     if not mission or not mission.get("inquiry"):
         return
 
@@ -333,16 +386,28 @@ def process_cli_interaction(engine: KidEngine) -> bool:
         facts = engine.query_brain_cra(keywords, current_situation)
         if not facts:
             # Deep Thinking fallback
-            trace_log("INFERENCE", f"No shallow hits for '{keywords}'. Transitioning to Pillar C: Deep Graph Traversal...", color="BLUE")
+            trace_log(
+                "INFERENCE",
+                f"No shallow hits for '{keywords}'. Transitioning to Pillar C: Deep Graph Traversal...",
+                color="BLUE",
+            )
             facts = engine.query_graph_inference(keywords, depth=2)
-        
+
         final_response = ""
         needs_teacher = False
 
         # 2. Logic & Back-Prop (Phase 18: Enhanced Correction Detection)
-        correction_prompts = ["no", "wrong", "incorrect", "false", "that is not true", "is wrong", "is incorrect"]
+        correction_prompts = [
+            "no",
+            "wrong",
+            "incorrect",
+            "false",
+            "that is not true",
+            "is wrong",
+            "is incorrect",
+        ]
         is_correction = any(cp in user_input.lower()[:15] for cp in correction_prompts)
-        
+
         if is_correction:
             final_response, needs_teacher = process_correction(user_input, processed_input, engine)
         else:
@@ -371,7 +436,7 @@ def execute_worker_phase(engine: KidEngine):
     print("\n--- Worker Phase Active. Type 'exit' to quit. ---")
     while process_cli_interaction(engine):
         time.sleep(0.1)  # Avoid busy-waiting CPU spin
-    
+
     print("Shutting down CLI worker...")
 
 
@@ -384,7 +449,11 @@ def execute_server_worker(engine: KidEngine, port: int = 5050):
     try:
         server.bind(("0.0.0.0", port))
         server.listen(5)
-        trace_log("NEURAL HUB", f"Kid Server active on port {port}. Use chat_terminal.py to connect.", color="MAGENTA")
+        trace_log(
+            "NEURAL HUB",
+            f"Kid Server active on port {port}. Use chat_terminal.py to connect.",
+            color="MAGENTA",
+        )
     except Exception as e:
         error_log(f"Failed to bind Neural Hub: {e}")
         return
@@ -414,21 +483,33 @@ def handle_client_request(client, engine: KidEngine):
 
         # 2. Information Extraction
         keywords, current_situation, processed_input = extract_keywords(user_input)
-        
+
         # 3. Brain Retrieval & Inference (Pillar C)
         facts = engine.query_brain_cra(keywords, current_situation)
         if not facts:
             # Deep Thinking fallback
-            trace_log("INFERENCE", f"No shallow hits for '{keywords}'. Transitioning to Pillar C: Deep Graph Traversal...", color="BLUE")
+            trace_log(
+                "INFERENCE",
+                f"No shallow hits for '{keywords}'. Transitioning to Pillar C: Deep Graph Traversal...",
+                color="BLUE",
+            )
             facts = engine.query_graph_inference(keywords, depth=2)
-            
+
         final_response = ""
         needs_teacher = False
 
         # 4. Correction handling (Phase 18: Enhanced Correction Detection)
-        correction_prompts = ["no", "wrong", "incorrect", "false", "that is not true", "is wrong", "is incorrect"]
+        correction_prompts = [
+            "no",
+            "wrong",
+            "incorrect",
+            "false",
+            "that is not true",
+            "is wrong",
+            "is incorrect",
+        ]
         is_correction = any(cp in user_input.lower()[:15] for cp in correction_prompts)
-        
+
         if is_correction:
             final_response, needs_teacher = process_correction(user_input, processed_input, engine)
         else:
@@ -460,14 +541,15 @@ def execute_autonomous_audit(engine: KidEngine):
         return
 
     from core.teacher import adjudicate_facts
+
     # Limit audit to a small cluster per loop for performance
     for id1, id2, s, r, o1, o2, context in conflicts[:5]:
         fact_a = f"${s} | {r} | {o1} | {context}$"
         fact_b = f"${s} | {r} | {o2} | {context}$"
-        
+
         trace_log("JUDICIAL AUDIT", f"Conflict Detected on Node: {s} | {r}", color="RED")
         decision = adjudicate_facts(fact_a, fact_b)
-        
+
         winner = decision.get("winner")
         reasoning = decision.get("reasoning", "No reasoning provided.")
         corrected = decision.get("corrected_quadruplet")
@@ -485,7 +567,7 @@ def execute_autonomous_audit(engine: KidEngine):
             engine.cursor.execute(engine.DELETE_QUERY, (id2,))
             engine.store_quadruplet(corrected)
             trace_log(log_tag, f"Corrected to: {corrected}. Reasoning: {reasoning}", color="CYAN")
-        
+
         engine.conn.commit()
 
 
@@ -502,7 +584,7 @@ def continuous_learning_loop():
                 execute_dream_phase(background_engine)
             else:
                 execute_idle_curiosity_phase(background_engine)
-            
+
             # Pillar A: Autonomous Contradiction Audit
             adjudicate_contradictions(background_engine)
 

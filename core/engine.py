@@ -3,9 +3,10 @@ import hashlib
 import os
 import re
 import sqlite3
-import sympy
 from datetime import datetime, timezone
-from typing import List, Tuple
+from typing import List
+
+import sympy
 
 from .logger import error_log, trace_log
 
@@ -21,17 +22,46 @@ class KidEngine:
         # SQLite handles file locks, but manual transactions need care if multi-writing.
         self.conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=15.0)
         self.cursor = self.conn.cursor()
-        self.cursor.execute("PRAGMA journal_mode=WAL;")
+        try:
+            self.cursor.execute("PRAGMA journal_mode=WAL;")
+        except sqlite3.OperationalError:
+            pass  # May be locked briefly or already in WAL mode
         self._initialize_db()
         self.DELETE_QUERY = "DELETE FROM quadruplets WHERE rowid = ?"
         self.PREFERENCE_CONTEXT = "UserPreference"
-        
+
         # Pillar Schema for Prefrontal Cortex (PFC)
         self.CORE_PILLARS = {
-            "Math": ["math", "arithmetic", "algebra", "geometry", "calculus", "calculating", "number"],
-            "Language": ["lang", "grammar", "etym", "ling", "vocab", "speech", "words", "sentence", "phonics"],
+            "Math": [
+                "math",
+                "arithmetic",
+                "algebra",
+                "geometry",
+                "calculus",
+                "calculating",
+                "number",
+            ],
+            "Language": [
+                "lang",
+                "grammar",
+                "etym",
+                "ling",
+                "vocab",
+                "speech",
+                "words",
+                "sentence",
+                "phonics",
+            ],
             "Logic": ["logic", "reason", "reasoning", "deduce", "syllogism", "cause", "condition"],
-            "Social": ["social", "greet", "interaction", "empath", "identity", "relation", "conversation"],
+            "Social": [
+                "social",
+                "greet",
+                "interaction",
+                "empath",
+                "identity",
+                "relation",
+                "conversation",
+            ],
             "Identity": ["identity", "name", "who am i", "ali"],
         }
 
@@ -122,8 +152,10 @@ class KidEngine:
 
     def _is_logically_valid(self, s: str, o: str, c: str) -> bool:
         """PFC: The Gatekeeper. Validates facts before they enter storage."""
-        if len(s) > 100 or len(o) > 500: return False
-        if s.count(" ") > 10 and c == "Math": return False 
+        if len(s) > 100 or len(o) > 500:
+            return False
+        if s.count(" ") > 10 and c == "Math":
+            return False
 
         if c == "Math":
             return self._verify_math_logic(s, o)
@@ -136,10 +168,11 @@ class KidEngine:
             return
 
         parts = [p.strip() for p in clean_str[1:-1].split("|")]
-        
+
         # Handle format normalization
         if len(parts) == 3:
-            s, r, o = parts; c = default_context
+            s, r, o = parts
+            c = default_context
         elif len(parts) >= 4:
             s, r, o, c = parts[:4]
         else:
@@ -151,12 +184,35 @@ class KidEngine:
             return
 
         self._trace("LEARNING", f"Saving Fact -> {s} | {r} | {o} | {c}")
-        self.cursor.execute("""
+        self.cursor.execute(
+            """
             INSERT INTO quadruplets (subject, relation, object, context, occurrences) 
             VALUES (?, ?, ?, ?, 1)
             ON CONFLICT(subject, relation, object, context) 
             DO UPDATE SET occurrences = occurrences + 1, last_seen_at = CURRENT_TIMESTAMP
-        """, (s, r, o, c))
+        """,
+            (s, r, o, c),
+        )
+
+    def _extract_text(self, file_path: str, file_name: str) -> str:
+        content = ""
+        if file_path.lower().endswith(".pdf"):
+            try:
+                import pypdf
+
+                with open(file_path, "rb") as f:
+                    reader = pypdf.PdfReader(f)
+                    for page in reader.pages:
+                        page_text = page.extract_text()
+                        if page_text:
+                            content += page_text + "\n"
+            except Exception as e:
+                error_log(f"Failed to read PDF {file_name}: {e}")
+                return ""
+        else:
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        return content
 
     def ingest_file(self, file_path: str):
         """Parallel ingestion of a file's contents into the database."""
@@ -185,28 +241,16 @@ class KidEngine:
         self.conn.commit()
 
         self._trace("READING", file_name)
-        content = ""
-        if file_path.lower().endswith(".pdf"):
-            try:
-                import pypdf
-
-                with open(file_path, "rb") as f:
-                    reader = pypdf.PdfReader(f)
-                    for page in reader.pages:
-                        page_text = page.extract_text()
-                        if page_text:
-                            content += page_text + "\n"
-            except Exception as e:
-                error_log(f"Failed to read PDF {file_name}: {e}")
-                return
-        else:
-            with open(file_path, "r", encoding="utf-8") as f:
-                content = f.read()
+        content = self._extract_text(file_path, file_name)
+        if not content:
+            return
 
         chunks = self.chunk_text(content)
         self._trace("PARALLEL INGESTION", f"Starting {len(chunks)} chunks...")
 
         try:
+            from core.teacher import translate_to_quadruplets
+
             with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
                 future_to_chunk = {
                     executor.submit(translate_to_quadruplets, chunk): chunk for chunk in chunks
@@ -264,42 +308,56 @@ class KidEngine:
     def _score_single_fact(self, s, r, o, c, w, ctx, nums, now):
         """Helper for CRA scoring."""
         from core.math_utils import contextual_resonant_activation
+
         a = contextual_resonant_activation(w, r, ctx)
-        if c.lower() == ctx.lower(): a *= 2.0
+        if c.lower() == ctx.lower():
+            a *= 2.0
         # Recency
-        self.cursor.execute("SELECT last_seen_at FROM quadruplets WHERE subject=? AND relation=? AND object=? AND context=?", (s, r, o, c))
+        self.cursor.execute(
+            "SELECT last_seen_at FROM quadruplets WHERE subject=? AND relation=? AND object=? AND context=?",
+            (s, r, o, c),
+        )
         row = self.cursor.fetchone()
         if row and row[0]:
             seen_dt = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-            if (now - seen_dt).total_seconds() < 60: a *= 2.0
+            if (now - seen_dt).total_seconds() < 60:
+                a *= 2.0
         # Math filter
-        if ctx == "Math":
-            subj_nums = set(re.findall(r'\d+', s))
-            if any(sn not in nums for sn in subj_nums): a *= 0.001
+        if ctx.lower() == "math":
+            if c.lower() != "math":
+                a *= 0.001
+            subj_nums = set(re.findall(r"\d+", s))
+            if any(sn not in nums for sn in subj_nums):
+                a *= 0.001
         return a
 
     def query_brain_cra(self, keywords: List[str], current_situation: str = "General") -> List[str]:
         """CRA lookup with Gatekeeper scoring."""
         from core.math_utils import spreading_activation_energy
-        if not keywords: return []
+
+        if not keywords:
+            return []
 
         query = "SELECT subject, relation, object, context, strength FROM quadruplets WHERE "
         conditions, params, expr = [], [], " ".join(keywords)
         if any(op in expr for op in "+-*/="):
-            conditions.append("subject LIKE ?"); params.append(f"%{expr}%")
+            conditions.append("subject LIKE ?")
+            params.append(f"%{expr}%")
         for kw in keywords:
             conditions.append("(subject LIKE ? OR object LIKE ?)")
-            p = f"%{kw}%"; params.extend([p, p])
+            p = f"%{kw}%"
+            params.extend([p, p])
 
         self.cursor.execute(query + " OR ".join(conditions), params)
         results = self.cursor.fetchall()
-        nums = set(re.findall(r'\d+', expr))
+        nums = set(re.findall(r"\d+", expr))
         now, scored = datetime.now(timezone.utc), []
 
         for row in results:
             s, r, o, c, w = row
             a = self._score_single_fact(s, r, o, c, w, current_situation, nums, now)
-            if expr.replace(" ", "") == s.replace(" ", ""): a *= 20.0 # Exact match boost
+            if expr.replace(" ", "") == s.replace(" ", ""):
+                a *= 20.0  # Exact match boost
             e = spreading_activation_energy(1.0, a, decay=1.2)
             scored.append((e, a, s, r, o, c))
 
@@ -363,13 +421,14 @@ class KidEngine:
         Pillar C: Multi-Step Graph Inference (Deep Thinking).
         A -> B -> C reasoning.
         """
-        if depth <= 0 or not keywords: return []
-        
+        if depth <= 0 or not keywords:
+            return []
+
         inferred = []
         for kw in keywords:
             self.cursor.execute(
-                "SELECT subject, relation, object, context FROM quadruplets WHERE subject LIKE ?", 
-                (f"%{kw}%",)
+                "SELECT subject, relation, object, context FROM quadruplets WHERE subject LIKE ?",
+                (f"%{kw}%",),
             )
             hits = self.cursor.fetchall()
             for s, r, o, c in hits:
@@ -378,7 +437,7 @@ class KidEngine:
                 # Recursive walk: Use Object as Subject for next level
                 sub_results = self.query_graph_inference([o], depth - 1)
                 inferred.extend(sub_results)
-        
+
         return list(set(inferred))
 
     def update_link_strengths(self):
@@ -436,9 +495,7 @@ class KidEngine:
         self.cursor.execute("SELECT rowid, truth_value FROM quadruplets WHERE truth_value < 0.5")
         mistakes = self.cursor.fetchall()
         if mistakes:
-            self.cursor.executemany(
-                self.DELETE_QUERY, [(m[0],) for m in mistakes]
-            )
+            self.cursor.executemany(self.DELETE_QUERY, [(m[0],) for m in mistakes])
             self.conn.commit()
             self._trace(
                 "PSL Math", f"Discarded {len(mistakes)} hallucinated mistakes.", color="RED"
