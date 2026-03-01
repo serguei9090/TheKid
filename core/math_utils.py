@@ -74,6 +74,14 @@ def contextual_resonant_activation(
             phi = 2.0
         elif relation.lower() in ["greeting", "hello", "hi"]:
             phi = 0.1
+            
+    # Math state resonance (Phase 17)
+    elif current_situation == "Math":
+        math_rels = ["+", "-", "*", "/", "=", "result", "equals", "is", "sum", "total"]
+        if any(mr in relation.lower() for mr in math_rels):
+            phi = 3.0  # High resonance for factual calculations
+        elif relation.lower() in ["greeting", "info"]:
+            phi = 0.5
 
     return base_strength * phi
 

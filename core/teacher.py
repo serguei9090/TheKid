@@ -189,3 +189,66 @@ Respond in JSON format:
     except Exception as e:
         error_log(f"Adjudication failed: {e}")
         return {"winner": "BOTH", "reasoning": str(e), "corrected_quadruplet": None}
+
+
+def proactive_inquiry(focus_topic: str = None) -> dict:
+    """
+    Teacher generates a proactive learning mission.
+    Styles: 'Investigative' (Science), 'Postulate' (Logic), 'Recall' (History), 'Synthesis' (General).
+    """
+    if not is_teacher_present():
+        return {}
+
+    # Focused on top mathematician/linguist goal (Phase 18)
+    styles = ["Arithmetic", "Algebra", "Logic", "Grammar", "Etymology", "Socratic"]
+    import random
+    style = random.choice(styles)
+    
+    topic_str = f"the concept of '{focus_topic}'" if focus_topic else "a foundational mathematical or linguistic concept"
+    
+    prompt = f"""You are a Proactive Master Teacher. Focus ONLY on Math and Language Mastery for Ali.
+Mission Style: {style}
+Target Topic: {topic_str}
+
+If the style is:
+- Arithmetic: Focus on addition, subtraction, multiplication, division facts.
+- Algebra: Focus on variables, equations (like x+y=z), and unknowns.
+- Logic: Focus on logical connectors, boolean truth, and syllogisms.
+- Grammar: Focus on sentence structure, parts of speech, and syntax rules.
+- Etymology: Focus on the origins and meanings of specific words.
+- Socratic: Ask a deep 'Why' or 'How' question about numbers or words.
+
+Generate a brief (1-2 sentence) inquiry to Ali.
+Then, provide 5-8 $Subject | Relation | Object | Context$ quadruplets that answer or expand on this inquiry.
+Make sure the Context is 'Math' or 'Language'.
+
+Response Format:
+[INQUIRY]: Your question or statement to Ali.
+[FACTS]:
+$Subject | Relation | Object | Context$
+...
+"""
+    try:
+        with teacher_lock:
+            # Use Gemini if available for higher quality variety, else Ollama
+            if gemini_client:
+                 response = gemini_client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
+                 result = response.text
+            else:
+                response = ollama_client.generate(model=MODEL_NAME, prompt=prompt, stream=False)
+                result = response.get("response", "")
+
+        lines = result.split("\n")
+        inquiry = ""
+        facts = []
+        for line in lines:
+            if line.startswith("[INQUIRY]:"):
+                inquiry = line.replace("[INQUIRY]:", "").strip()
+            elif line.startswith("$") and line.endswith("$"):
+                facts.append(line.strip())
+        
+        return {"style": style, "inquiry": inquiry, "facts": facts}
+
+    except Exception as e:
+        error_log(f"Proactive inquiry failed: {e}")
+        return {}

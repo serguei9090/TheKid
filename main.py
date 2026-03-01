@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import socket
 import threading
 import time
@@ -191,206 +192,186 @@ def get_user_context(user_input: str) -> str:
     if any(ik in user_input.lower() for ik in identity_keywords):
         return "Identity"
     
+    # Math Routing (Phase 18)
+    # Check for numbers and math symbols
+    if re.search(r'\d+', user_input) and any(op in user_input for op in "+-*/="):
+        return "Math"
+
     if "hi" in user_input.lower() or "hello" in user_input.lower() or "hey" in user_input.lower():
         return "Social"
 
     return "General"
 
 
+def extract_keywords(user_input: str) -> tuple[list[str], str, str]:
+    """Intelligent Keyword Extraction (Phase 17/18)"""
+    processed_input = user_input.replace("?", "").replace(".", "")
+    for char in "+-*/=":
+        processed_input = processed_input.replace(char, f" {char} ")
+    
+    raw_kws = [kw for kw in processed_input.split() if len(kw) > 0]
+    
+    stop_words = {"are", "is", "the", "a", "an", "am", "of", "to", "in", "it", "that", "this", "my", "your", "for", "do", "how", "what", "where", "when", "why", "you"}
+    keywords = [kw for kw in raw_kws if kw.lower() not in stop_words]
+    if not keywords and raw_kws: keywords = raw_kws
+    
+    current_situation = get_user_context(user_input)
+    if current_situation == "Identity":
+        keywords.extend(["is_named", "identity", "am", "name", "Ali"])
+    elif current_situation == "Math":
+        # Specific Extraction for Math (Phase 18)
+        # We look for the arithmetic pattern and put it at the start as a single keyword
+        math_match = re.search(r'(\d+\s*[\+\-\*\/]\s*\d+)', processed_input)
+        if math_match:
+            # We put the whole expression as the first keyword, and individual numbers after
+            expr = math_match.group(1).strip()
+            # Remove spaces for tighter matching
+            keywords = [expr, expr.replace(" ", "")] + keywords
+        
+    return keywords, current_situation, processed_input
+
+
+def handle_teacher_query(user_input: str, engine: KidEngine) -> str:
+    """ALI'S GOLD-FISH FIX: Actually ask teacher and INGEST the knowledge"""
+    trace_log("TEACHER", f"Ali is asking teacher for: {user_input}...", color="YELLOW")
+    
+    prompt = (
+        f"You are a Teacher assisting Ali. Provide a concise answer to: '{user_input}'.\n"
+        "Then, format the core knowledge into strictly formatted $Subject | Relation | Object | Context$ quadruplets.\n"
+        "Use the 'Math' context for calculations, or 'Social' for conversation."
+    )
+    
+    from core.teacher import MODEL_NAME, ollama_client, teacher_lock, translate_to_quadruplets
+    try:
+        with teacher_lock:
+            resp = ollama_client.generate(model=MODEL_NAME, prompt=prompt, stream=False)
+        
+        full_response = resp.get("response", "")
+        
+        # Extract and Store for Future Memory (ALI LEARNS HERE)
+        new_quads = translate_to_quadruplets(full_response)
+        if new_quads:
+            for quad in new_quads:
+                engine.store_quadruplet(quad)
+            engine.conn.commit()
+            trace_log("LEARNING", f"Ali just learned {len(new_quads)} new facts about this!", color="GREEN")
+        
+        return f"TEACHER: {full_response.split('$')[0].strip()}"
+        
+    except Exception as e:
+        error_log(f"Teacher ingestion failed: {e}")
+        return "ALI: I am having trouble connecting to my Teacher right now."
+
+
+def process_correction(user_input: str, processed_input: str, engine: KidEngine) -> tuple[str, bool]:
+    """Processes a user correction and attempts fast-learning."""
+    engine.backpropagate_feedback(correct=False)
+    
+    correction_patterns = [r"is\s+(.+)$", r"it\s+is\s+(.+)$", r"answer\s+is\s+(.+)$"]
+    
+    for pattern in correction_patterns:
+        match = re.search(pattern, user_input.lower())
+        if match:
+            correction_value = match.group(1).strip()
+            # Try to reconstruct a math fact
+            if any(op in processed_input for op in "+-*/"):
+                expr_match = re.search(r"(\d+\s*[\+\-\*\/]\s*\d+)", processed_input)
+                if expr_match:
+                    expr = expr_match.group(1).strip()
+                    new_fact = f"${expr} | Equals | {correction_value} | Math$"
+                    engine.store_quadruplet(new_fact)
+                    engine.conn.commit()
+                    trace_log("FAST LEARNING", f"Intercepted correction: {new_fact}", color="GREEN")
+                    return f"THE KID: I am sorry. I have updated my memory. It is indeed {correction_value}.", False
+    
+    return "THE KID: I am sorry. I have adjusted my memory based on your correction.", True
+
+
 def execute_idle_curiosity_phase(engine: KidEngine):
     """
-    The 'Greedy Learner' Loop. If The Kid has no incoming Library files,
-    he randomly picks a topic from his brain and asks the Teacher to expand on it!
+    The 'Greedy Learner' Loop. Ali picks a random subject from his brain
+    and the Teacher provides a mission (Science, Logic, or History).
     """
     engine.cursor.execute("SELECT subject FROM quadruplets ORDER BY RANDOM() LIMIT 1")
     result = engine.cursor.fetchone()
-    if not result:
-        return  # Brain is totally empty, nothing to be curious about yet.
+    random_concept = result[0] if result else None
 
-    random_concept = result[0]
+    from core.teacher import proactive_inquiry
+    mission = proactive_inquiry(random_concept)
+    
+    if not mission or not mission.get("inquiry"):
+        return
 
     trace_log(
         "CURIOSITY",
-        f"Idle brain thinking... 'I wonder what else I can learn about {random_concept}?'",
+        f"Ali is thinking in {mission['style']} mode... '{mission['inquiry']}'",
         color="MAGENTA",
         show_in_console=True,
     )
 
-    prompt = (
-        f"You are a Teacher. Provide a completely new, deeper, or different perspective on the concept: '{random_concept}'.\n"
-        "Explain it clearly in a few sentences.\n"
-        "Then format the core facts into $Subject | Relation | Object | Context$ quadruplets."
-    )
+    new_quads = mission.get("facts", [])
+    if new_quads:
+        trace_log(
+            "LEARNING ON THE FLY",
+            f"Curiosity satisfied! Extracted {len(new_quads)} new {mission['style']} facts.",
+            color="GREEN",
+            show_in_console=True,
+        )
+        for quad in new_quads:
+            engine.store_quadruplet(quad)
+        engine.conn.commit()
 
+
+def process_cli_interaction(engine: KidEngine) -> bool:
+    """Handles a single CLI interaction loop step. Returns False if exiting."""
     try:
-        from core.teacher import MODEL_NAME, ollama_client, teacher_lock
-        from core.teacher import translate_to_quadruplets
+        user_input = input("USER: ")
+        if user_input.lower() in ["exit", "quit", "q"]:
+            return False
 
-        with teacher_lock:
-            response = ollama_client.generate(model=MODEL_NAME, prompt=prompt, stream=False)
-        teacher_answer = response.get("response", "")
+        trace_log("SEARCHING", f"Processing CLI Request: '{user_input}'", color="CYAN")
 
-        new_quads = translate_to_quadruplets(teacher_answer)
-        if new_quads:
-            trace_log(
-                "LEARNING ON THE FLY",
-                f"Curiosity satisfied! Extracted {len(new_quads)} new facts about {random_concept}.",
-                color="GREEN",
-                show_in_console=True,
-            )
-            for quad in new_quads:
-                engine.store_quadruplet(quad)
-            engine.conn.commit()
+        # 1. Extraction & Retrieval
+        keywords, current_situation, processed_input = extract_keywords(user_input)
+        facts = engine.query_brain_cra(keywords, current_situation)
+        
+        final_response = ""
+        needs_teacher = False
+
+        # 2. Logic & Back-Prop (Phase 18: Enhanced Correction Detection)
+        correction_prompts = ["no", "wrong", "incorrect", "false", "that is not true", "is wrong", "is incorrect"]
+        is_correction = any(cp in user_input.lower()[:15] for cp in correction_prompts)
+        
+        if is_correction:
+            final_response, needs_teacher = process_correction(user_input, processed_input, engine)
+        else:
+            if facts:
+                final_response = f"ALI: {generate_sentence(facts)}"
+                engine.backpropagate_feedback(correct=True)
+            else:
+                final_response = "ALI: I don't know that yet, let me ask my Teacher."
+                needs_teacher = True
+
+        # 3. Teacher Fallback
+        if needs_teacher:
+            final_response = handle_teacher_query(user_input, engine)
+
+        print(final_response)
+        print("-" * 50)
+        return True
 
     except Exception as e:
-        error_log(f"Curiosity phase failed: {e}")
+        error_log(f"Worker phase encountered an error: {e}")
+        return True
 
 
 def execute_worker_phase(engine: KidEngine):
-    """Relational lookup and Algorithmic Native response"""
+    """Relational lookup and Algorithmic Native response (CLI version)"""
     print("\n--- Worker Phase Active. Type 'exit' to quit. ---")
-    while True:
-        try:
-            user_input = input("USER: ")
-            if user_input.lower() in ["exit", "quit", "q"]:
-                break
-
-            trace_log("SEARCHING", "Querying .rem database for concepts...")
-
-            # Advanced keyword extraction (omit functional stop words)
-            stop_words = {
-                "are",
-                "is",
-                "the",
-                "a",
-                "an",
-                "am",
-                "of",
-                "to",
-                "in",
-                "it",
-                "that",
-                "this",
-                "my",
-                "your",
-                "for",
-                "do",
-                "how",
-                "what",
-                "where",
-                "when",
-                "why",
-                "you",
-            }
-            raw_kws = [
-                kw for kw in user_input.replace("?", "").replace(".", "").split() if len(kw) > 0
-            ]
-
-            keywords = [kw for kw in raw_kws if kw.lower() not in stop_words]
-            if not keywords and raw_kws:
-                keywords = raw_kws  # Fallback if they only type stop words
-
-            # Situational Context Logic
-            current_situation = get_user_context(user_input)
-
-            if current_situation == "Teaching":
-                trace_log(
-                    "CONTEXT SWITCH",
-                    f"Structural Dissonance triggered -> {current_situation}",
-                    color="YELLOW",
-                )
-            elif current_situation == "Identity":
-                trace_log(
-                    "CONTEXT SWITCH",
-                    f"Identity query detected -> {current_situation}",
-                    color="YELLOW",
-                )
-                # GUARDRAIL: Injecting identity words directly into the solver to avoid
-                # general dictionary matches pulling completely wrong data
-                keywords.extend(["is_named", "identity", "am", "name", "Ali"])
-
-            facts = engine.query_brain_cra(keywords, current_situation)
-
-            # --- PHASE 10: CORRECTION DETECTION ---
-            corrections = ["no", "wrong", "incorrect", "false", "that is not true"]
-            if any(user_input.lower().startswith(c) for c in corrections):
-                trace_log(
-                    "FEEDBACK",
-                    "User reported an error. Back-propagating truth values...",
-                    color="RED",
-                )
-                engine.backpropagate_feedback(correct=False)
-                print("THE KID: I am sorry. I have adjusted my memory based on your correction.")
-                # After a correction, we ask the teacher to explain why or provide the truth
-                needs_teacher = True
-            else:
-                if facts:
-                    trace_log("FOUND EXACT FACTS", str(facts), color="GREEN")
-                    trace_log(
-                        "ALGORITHMIC VOCAL CORDS", f"Synthesizing {len(facts)} internal facts."
-                    )
-                    response = generate_sentence(facts)
-                    print(f"ALI: {response}")
-                    # Reinforce the fact we just told the user (implicit positive feedback)
-                    engine.backpropagate_feedback(correct=True)
-
-            needs_teacher = False
-            if not facts:
-                print("ALI: I don't know that yet, let me ask my Teacher.")
-                needs_teacher = True
-            elif any(w in user_input.lower() for w in ["explain", "meaning", "learn", "better"]):
-                print("ALI: *Thinking... I should learn more about this from my Teacher.*")
-                needs_teacher = True
-
-            if needs_teacher:
-                # Proactive Learning Loop
-                prompt = (
-                    f"Please provide a concise answer to the user's question: '{user_input}'.\n"
-                    "Then format the core facts into $Subject | Relation | Object | Context$ "
-                    "quadruplets.\nUse a brief Context like 'Science', 'Social', 'Math', etc."
-                )
-
-                try:
-                    from core.teacher import MODEL_NAME, ollama_client, teacher_lock
-
-                    with teacher_lock:
-                        response_teacher = ollama_client.generate(
-                            model=MODEL_NAME, prompt=prompt, stream=False
-                        )
-                    teacher_answer = response_teacher.get("response", "")
-
-                    # Store any new quadruplets returned by the teacher
-                    from core.teacher import translate_to_quadruplets
-
-                    new_quads = translate_to_quadruplets(teacher_answer)
-                    if new_quads:
-                        trace_log(
-                            "LEARNING ON THE FLY",
-                            f"Extracted {len(new_quads)} new facts from Teacher.",
-                            color="GREEN",
-                        )
-                        for quad in new_quads:
-                            engine.store_quadruplet(quad)
-                        engine.conn.commit()  # ADDED: Commit facts to DB immediately
-
-                    if not facts:
-                        print(f"TEACHER: {teacher_answer.split('$')[0].strip()}")
-                    else:
-                        trace_log(
-                            "TEACHER BACKGROUND",
-                            "Teacher provided extra context. Brain expanded.",
-                            color="CYAN",
-                        )
-
-                except Exception as e:
-                    error_log(f"Could not ask Teacher: {e}")
-            print("-" * 50)
-
-        except KeyboardInterrupt:
-            print("\nShutting down The Kid forcefully...")
-            os._exit(0)
-        except Exception as e:
-            error_log(f"Worker phase encountered an error: {e}")
+    while process_cli_interaction(engine):
+        time.sleep(0.1)  # Avoid busy-waiting CPU spin
+    
+    print("Shutting down CLI worker...")
 
 
 def execute_server_worker(engine: KidEngine, port: int = 5050):
@@ -424,59 +405,41 @@ def handle_client_request(client, engine: KidEngine):
         user_input = data.strip()
         trace_log("SEARCHING", f"Processing Neural Request: '{user_input}'", color="CYAN")
 
-        # --- PHASE 12: SHUTDOWN COMMAND ---
+        # 1. Shutdown processing
         if user_input.lower() in ["shutdown", "shutdown_server", "terminate_brain"]:
             client.send("SYSTEM: Brain server shutting down...".encode("utf-8"))
             client.close()
-            trace_log("SYSTEM", "Remote shutdown command received. Closing...", color="RED")
             os._exit(0)
 
-        # 1. Extraction & Context
-        stop_words = {"are", "is", "the", "a", "an", "am", "of", "to", "in", "it", "that", "this", "my", "your", "for", "do", "how", "what", "where", "when", "why", "you"}
-        raw_kws = [kw for kw in user_input.replace("?", "").replace(".", "").split() if len(kw) > 0]
-        keywords = [kw for kw in raw_kws if kw.lower() not in stop_words]
-        if not keywords and raw_kws: keywords = raw_kws
+        # 2. Information Extraction
+        keywords, current_situation, processed_input = extract_keywords(user_input)
         
-        current_situation = get_user_context(user_input)
-        if current_situation == "Identity":
-            keywords.extend(["is_named", "identity", "am", "name", "Ali"])
-
-        # 2. Brain Retrieval (CRA Math)
+        # 3. Brain Retrieval
         facts = engine.query_brain_cra(keywords, current_situation)
         
         final_response = ""
         needs_teacher = False
 
-        # 3. Logic & Back-Prop
-        corrections = ["no", "wrong", "incorrect", "false", "that is not true"]
-        if any(user_input.lower().startswith(c) for c in corrections):
-            engine.backpropagate_feedback(correct=False)
-            final_response = "THE KID: I am sorry. I have adjusted my memory based on your correction."
-            needs_teacher = True
+        # 4. Correction handling (Phase 18: Enhanced Correction Detection)
+        correction_prompts = ["no", "wrong", "incorrect", "false", "that is not true", "is wrong", "is incorrect"]
+        is_correction = any(cp in user_input.lower()[:15] for cp in correction_prompts)
+        
+        if is_correction:
+            final_response, needs_teacher = process_correction(user_input, processed_input, engine)
         else:
             if facts:
-                response_text = generate_sentence(facts)
-                final_response = f"ALI: {response_text}"
+                final_response = f"ALI: {generate_sentence(facts)}"
                 engine.backpropagate_feedback(correct=True)
             else:
                 final_response = "ALI: I don't know that yet, let me ask my Teacher."
                 needs_teacher = True
 
-        # 4. Teacher Fallback (Background/Proactive)
+        # 5. Teacher Fallback
         if needs_teacher:
-            # We return the initial "I don't know" immediately, and let the teacher work in background
-            # For a better UI, we can wait 1-2 seconds for a teacher summary if facts were empty
-            if not facts:
-                prompt = f"Provide a concise answer and quadruplets for: '{user_input}'"
-                from core.teacher import MODEL_NAME, ollama_client, teacher_lock
-                with teacher_lock:
-                    resp = ollama_client.generate(model=MODEL_NAME, prompt=prompt, stream=False)
-                teacher_text = resp.get("response", "").split("$")[0].strip()
-                final_response = f"TEACHER: {teacher_text}"
+            final_response = handle_teacher_query(user_input, engine)
 
         client.send(final_response.encode("utf-8"))
         client.close()
-
     except Exception as e:
         error_log(f"Handle client failed: {e}")
         client.close()

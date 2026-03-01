@@ -1,7 +1,9 @@
 import concurrent.futures
 import hashlib
 import os
+import re
 import sqlite3
+from datetime import datetime, timezone
 from typing import List
 
 from .logger import error_log, trace_log
@@ -21,6 +23,7 @@ class KidEngine:
         self.cursor = self.conn.cursor()
         self.cursor.execute("PRAGMA journal_mode=WAL;")
         self._initialize_db()
+        self.DELETE_QUERY = "DELETE FROM quadruplets WHERE rowid = ?"
 
     def _trace(self, module: str, message: str, color: str = "GRAY"):
         trace_log(module, message, color=color, show_in_console=not self.silent_trace)
@@ -230,6 +233,12 @@ class KidEngine:
         conditions = []
         params = []
 
+        # Optimization: Prioritize the whole expression if it is math-like
+        expr = " ".join(keywords)
+        if any(op in expr for op in "+-*/="):
+            conditions.append("subject LIKE ?")
+            params.append(f"%{expr}%")
+
         for kw in keywords:
             conditions.append("(subject LIKE ? OR object LIKE ?)")
             kw_param = f"%{kw}%"
@@ -239,19 +248,42 @@ class KidEngine:
         self.cursor.execute(query, params)
         results = self.cursor.fetchall()
 
+        # Phase 18: Extract numbers from input for strict validation
+        input_numbers = set()
+        for kw in keywords:
+            input_numbers.update(re.findall(r'\d+', kw))
+
         # Calculate Cra Math for each result
         scored_results = []
         energy_source = 1.0  # Base user energy
+        
+        now = datetime.now(timezone.utc)
 
         for s, r, o, c, w in results:
             activation = contextual_resonant_activation(w, r, current_situation)
             
             # Phase 17: Context Match Multiplier
-            # If the fact's metadata context matches the current situation, boost resonance
             if c.lower() == current_situation.lower():
-                activation *= 1.5
+                activation *= 2.0
             
-            energy_target = spreading_activation_energy(energy_source, activation, decay=1.5)
+            # Recency Boost (Freshness factor)
+            self.cursor.execute("SELECT last_seen_at FROM quadruplets WHERE subject=? AND relation=? AND object=? AND context=?", (s, r, o, c))
+            last_seen_row = self.cursor.fetchone()
+            if last_seen_row and last_seen_row[0]:
+                last_seen_dt = datetime.strptime(last_seen_row[0], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                seconds_ago = (now - last_seen_dt).total_seconds()
+                if seconds_ago < 60: activation *= 2.0
+
+            # Phase 18: Numeric Validation Penalty
+            if current_situation == "Math":
+                fact_text = f"{s} {o}".lower()
+                fact_numbers = set(re.findall(r'\d+', fact_text))
+                # Penalize if fact contains numbers NOT in query AND NOT in the result object
+                for fn in fact_numbers:
+                    if fn not in input_numbers and fn not in o:
+                        activation *= 0.01
+
+            energy_target = spreading_activation_energy(energy_source, activation, decay=1.2)
             scored_results.append((energy_target, activation, s, r, o, c))
 
         # Sort by highest resonant energy
@@ -292,18 +324,18 @@ class KidEngine:
         fact_id = row[0]
         if correct:
             self.cursor.execute(
-                "UPDATE quadruplets SET strength = MIN(2.0, strength + 0.2), truth_value = MIN(1.0, truth_value + 0.1) WHERE rowid = ?",
+                "UPDATE quadruplets SET strength = MIN(2.0, strength + 0.3), truth_value = MIN(1.0, truth_value + 0.2) WHERE rowid = ?",
                 (fact_id,),
             )
         else:
+            # Phase 18: Aggressive Corrections
+            # If the user says 'Wrong', we effectively kill the fact immediately.
             self.cursor.execute(
-                "UPDATE quadruplets SET strength = strength * 0.5, truth_value = truth_value * 0.5 WHERE rowid = ?",
+                "UPDATE quadruplets SET strength = 0.0, truth_value = 0.0 WHERE rowid = ?",
                 (fact_id,),
             )
-            # Check for deletion
-            self.cursor.execute(
-                "DELETE FROM quadruplets WHERE rowid = ? AND strength < 0.1", (fact_id,)
-            )
+            # Immediate deletion of the rejected fact
+            self.cursor.execute(self.DELETE_QUERY, (fact_id,))
         self.conn.commit()
 
     def find_contradictions(self) -> List[tuple]:
@@ -364,7 +396,7 @@ class KidEngine:
                 prune_ids.append((rowid,))
 
         if prune_ids:
-            self.cursor.executemany("DELETE FROM quadruplets WHERE rowid = ?", prune_ids)
+            self.cursor.executemany(self.DELETE_QUERY, prune_ids)
             self.conn.commit()
             self._trace("ENTROPY PRUNING", f"Forgot {len(prune_ids)} weak facts.", color="RED")
 
@@ -376,7 +408,7 @@ class KidEngine:
         mistakes = self.cursor.fetchall()
         if mistakes:
             self.cursor.executemany(
-                "DELETE FROM quadruplets WHERE rowid = ?", [(m[0],) for m in mistakes]
+                self.DELETE_QUERY, [(m[0],) for m in mistakes]
             )
             self.conn.commit()
             self._trace(
