@@ -5,6 +5,7 @@ description = "The Kid - Neuro-Symbolic Specialist"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "google-genai>=1.65.0",
     "ollama>=0.6.1",
     "pypdf>=6.7.4",
     "python-dotenv>=1.2.1",

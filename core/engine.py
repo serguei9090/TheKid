@@ -155,15 +155,42 @@ class KidEngine:
         self._trace("PARALLEL INGESTION", f"Starting {len(chunks)} chunks...")
 
         try:
-            from rich.progress import (
-                BarColumn,
-                Progress,
-                SpinnerColumn,
-                TaskProgressColumn,
-                TextColumn,
-            )
-
             with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+                future_to_chunk = {
+                    executor.submit(translate_to_quadruplets, chunk): chunk for chunk in chunks
+                }
+
+                total_chunks = len(chunks)
+                completed = 0
+
+                for future in concurrent.futures.as_completed(future_to_chunk):
+                    try:
+                        result_quads = future.result()
+                        # LIVE INGESTION: Stream results straight to the database
+                        for quad in result_quads:
+                            self.store_quadruplet(quad)
+                        self.conn.commit()
+
+                        completed += 1
+                        if completed % 10 == 0 or completed == total_chunks:
+                            # Bypass silent_trace to show milestone progress without locking the input
+                            trace_log(
+                                "PROGRESS",
+                                f"Ingested {completed}/{total_chunks} chunks of {file_name}",
+                                color="CYAN",
+                                show_in_console=True,
+                            )
+
+                        self._trace(
+                            "TEACHER RETURNED",
+                            f"{len(result_quads)} triplets/quads from chunk.",
+                        )
+                    except KeyboardInterrupt:
+                        self._trace(
+                            "SHUTDOWN",
+                            "Interrupted during Teacher Extraction. Cancelling...",
+                            color="RED",
+                        )
                         for f in future_to_chunk:
                             f.cancel()
                         return
@@ -216,11 +243,12 @@ class KidEngine:
 
         # Sort by highest resonant energy
         scored_results.sort(key=lambda x: x[0], reverse=True)
-        top_10 = scored_results[:10]
+        top_facts = scored_results[:2]  # NSCA: Singular Convergence (1 or 2 facts max)
 
         formatted = []
-        for e, a, s, r, o, c in top_10:
-            if e > 0:
+        for e, a, s, r, o, c in top_facts:
+            # NSCA: Minimum energy threshold to avoid hallucinated garbage links
+            if e > 0.3:
                 # Log CRA decision trace with Energy (E) and Activation (A)
                 self._trace(
                     "CRA Math",
@@ -320,9 +348,14 @@ class KidEngine:
             if teacher_verify_cb and teacher_verify_cb(subj_a, subj_b):
                 self._trace("MERGING", f"{subj_b} into {subj_a}", color="YELLOW")
                 self.cursor.execute(
-                    "UPDATE quadruplets SET subject = ? WHERE subject = ?", (subj_a, subj_b)
+                    "UPDATE OR IGNORE quadruplets SET subject = ? WHERE subject = ?",
+                    (subj_a, subj_b),
                 )
                 self.cursor.execute(
-                    "UPDATE quadruplets SET object = ? WHERE object = ?", (subj_a, subj_b)
+                    "UPDATE OR IGNORE quadruplets SET object = ? WHERE object = ?", (subj_a, subj_b)
+                )
+                # Cleanup leftover un-merged duplicates (due to ignore)
+                self.cursor.execute(
+                    "DELETE FROM quadruplets WHERE subject = ? OR object = ?", (subj_b, subj_b)
                 )
                 self.conn.commit()

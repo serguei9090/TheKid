@@ -1,6 +1,0 @@
-{
-    "action": "ingest_file",
-    "goal": "Autonomous learning of Oxford Collocations Dictionary for Students of English.pdf",
-    "target_file": "Oxford Collocations Dictionary for Students of English.pdf",
-    "completed": false
-}

@@ -5,7 +5,7 @@ import time
 
 from core.engine import KidEngine
 from core.logger import clear_trace_log, error_log, trace_log
-from core.teacher import is_teacher_present, vocalize
+from core.vocal_cords import generate_sentence
 
 MISSIONS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "missions"))
 LIBRARY_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "library"))
@@ -139,12 +139,57 @@ def get_user_context(user_input: str) -> str:
     return "Social"
 
 
-def execute_worker_phase(engine: KidEngine):
-    """Relational lookup and Template response"""
-    if not is_teacher_present():
-        error_log("Teacher not present. The Kid cannot vocalize thoughts.")
-        return
+def execute_idle_curiosity_phase(engine: KidEngine):
+    """
+    The 'Greedy Learner' Loop. If The Kid has no incoming Library files,
+    he randomly picks a topic from his brain and asks the Teacher to expand on it!
+    """
+    engine.cursor.execute("SELECT subject FROM quadruplets ORDER BY RANDOM() LIMIT 1")
+    result = engine.cursor.fetchone()
+    if not result:
+        return  # Brain is totally empty, nothing to be curious about yet.
 
+    random_concept = result[0]
+
+    trace_log(
+        "CURIOSITY",
+        f"Idle brain thinking... 'I wonder what else I can learn about {random_concept}?'",
+        color="MAGENTA",
+        show_in_console=True,
+    )
+
+    prompt = (
+        f"You are a Teacher. Provide a completely new, deeper, or different perspective on the concept: '{random_concept}'.\n"
+        "Explain it clearly in a few sentences.\n"
+        "Then format the core facts into $Subject | Relation | Object | Context$ quadruplets."
+    )
+
+    try:
+        from core.teacher import MODEL_NAME, ollama_client, teacher_lock
+        from core.teacher import translate_to_quadruplets
+
+        with teacher_lock:
+            response = ollama_client.generate(model=MODEL_NAME, prompt=prompt, stream=False)
+        teacher_answer = response.get("response", "")
+
+        new_quads = translate_to_quadruplets(teacher_answer)
+        if new_quads:
+            trace_log(
+                "LEARNING ON THE FLY",
+                f"Curiosity satisfied! Extracted {len(new_quads)} new facts about {random_concept}.",
+                color="GREEN",
+                show_in_console=True,
+            )
+            for quad in new_quads:
+                engine.store_quadruplet(quad)
+            engine.conn.commit()
+
+    except Exception as e:
+        error_log(f"Curiosity phase failed: {e}")
+
+
+def execute_worker_phase(engine: KidEngine):
+    """Relational lookup and Algorithmic Native response"""
     print("\n--- Worker Phase Active. Type 'exit' to quit. ---")
     while True:
         try:
@@ -154,10 +199,38 @@ def execute_worker_phase(engine: KidEngine):
 
             trace_log("SEARCHING", "Querying .rem database for concepts...")
 
-            # Simple keyword extraction (ignore empty strings, allow 'hi')
-            keywords = [
+            # Advanced keyword extraction (omit functional stop words)
+            stop_words = {
+                "are",
+                "is",
+                "the",
+                "a",
+                "an",
+                "am",
+                "of",
+                "to",
+                "in",
+                "it",
+                "that",
+                "this",
+                "my",
+                "your",
+                "for",
+                "do",
+                "how",
+                "what",
+                "where",
+                "when",
+                "why",
+                "you",
+            }
+            raw_kws = [
                 kw for kw in user_input.replace("?", "").replace(".", "").split() if len(kw) > 0
             ]
+
+            keywords = [kw for kw in raw_kws if kw.lower() not in stop_words]
+            if not keywords and raw_kws:
+                keywords = raw_kws  # Fallback if they only type stop words
 
             # Situational Context Logic
             current_situation = get_user_context(user_input)
@@ -179,9 +252,21 @@ def execute_worker_phase(engine: KidEngine):
                 keywords.extend(["is_named", "identity", "am", "name"])
 
             facts = engine.query_brain_cra(keywords, current_situation)
+            if facts:
+                trace_log("FOUND EXACT FACTS", str(facts), color="GREEN")
+                trace_log("ALGORITHMIC VOCAL CORDS", f"Synthesizing {len(facts)} internal facts.")
+                response = generate_sentence(facts)
+                print(f"THE KID: {response}")
+
+            needs_teacher = False
             if not facts:
                 print("THE KID: I don't know that yet, let me ask my Teacher.")
+                needs_teacher = True
+            elif any(w in user_input.lower() for w in ["explain", "meaning", "learn", "better"]):
+                print("THE KID: *Thinking... I should learn more about this from my Teacher.*")
+                needs_teacher = True
 
+            if needs_teacher:
                 # Proactive Learning Loop
                 prompt = (
                     f"Please provide a concise answer to the user's question: '{user_input}'.\n"
@@ -190,11 +275,13 @@ def execute_worker_phase(engine: KidEngine):
                 )
 
                 try:
-                    from core.teacher import MODEL_NAME, client, teacher_lock
+                    from core.teacher import MODEL_NAME, ollama_client, teacher_lock
 
                     with teacher_lock:
-                        response = client.generate(model=MODEL_NAME, prompt=prompt, stream=False)
-                    teacher_answer = response.get("response", "")
+                        response_teacher = ollama_client.generate(
+                            model=MODEL_NAME, prompt=prompt, stream=False
+                        )
+                    teacher_answer = response_teacher.get("response", "")
 
                     # Store any new quadruplets returned by the teacher
                     from core.teacher import translate_to_quadruplets
@@ -203,22 +290,24 @@ def execute_worker_phase(engine: KidEngine):
                     if new_quads:
                         trace_log(
                             "LEARNING ON THE FLY",
-                            f"Extracted {len(new_quads)} new facts.",
+                            f"Extracted {len(new_quads)} new facts from Teacher.",
                             color="GREEN",
                         )
                         for quad in new_quads:
                             engine.store_quadruplet(quad)
                         engine.conn.commit()  # ADDED: Commit facts to DB immediately
 
-                    print(f"TEACHER: {teacher_answer.split('$')[0].strip()}")
+                    if not facts:
+                        print(f"TEACHER: {teacher_answer.split('$')[0].strip()}")
+                    else:
+                        trace_log(
+                            "TEACHER BACKGROUND",
+                            "Teacher provided extra context. Brain expanded.",
+                            color="CYAN",
+                        )
 
                 except Exception as e:
                     error_log(f"Could not ask Teacher: {e}")
-            else:
-                trace_log("FOUND EXACT FACTS", str(facts), color="GREEN")
-                trace_log("ASKING TEACHER", f"Sending {len(facts)} facts to vocal cords.")
-                response = vocalize(facts, user_input)
-                print(f"THE KID: {response}")
             print("-" * 50)
 
         except KeyboardInterrupt:
@@ -250,6 +339,10 @@ def continuous_learning_loop():
                     color="BLUE",
                     show_in_console=False,
                 )
+            else:
+                # Idle state -> Start Curiosity (Greedy Learning)
+                execute_idle_curiosity_phase(background_engine)
+
         except Exception as e:
             error_log(f"Background thread crashed but catching internally: {e}")
         time.sleep(10)  # Check for new PDFs every 10 seconds

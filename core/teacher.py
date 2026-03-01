@@ -1,26 +1,48 @@
 import logging
 import os
+import threading
 
-from ollama import Client
+from dotenv import load_dotenv
+from ollama import Client as OllamaClient
 
-from .logger import error_log
+from .logger import error_log, trace_log
 
 load_dotenv()
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 MODEL_NAME = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+USE_GEMINI = os.getenv("USE_GEMINI", "true").lower() == "true"
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-native-audio-preview-12-2025")
 
 logger = logging.getLogger(__name__)
 
-client = Client(host=OLLAMA_BASE_URL)
+# Ollama Setup (Local Personality)
+ollama_client = OllamaClient(host=OLLAMA_BASE_URL)
 teacher_lock = threading.Lock()
+
+# Gemini Setup (Cloud Reader)
+gemini_client = None
+if GOOGLE_API_KEY and USE_GEMINI:
+    try:
+        from google import genai
+
+        # Initialize with v1alpha explicitly to support experimental native-audio models
+        gemini_client = genai.Client(
+            api_key=GOOGLE_API_KEY, http_options={"api_version": "v1alpha"}
+        )
+        trace_log("TEACHER", "Gemini API initialized for background reading.", color="GREEN")
+    except ImportError:
+        error_log("google-genai module not found. Run 'uv add google-genai'.")
+    except Exception as e:
+        error_log(f"Failed to initialize Gemini: {e}")
 
 
 def is_teacher_present() -> bool:
     """Check if Ollama server is running and accessible."""
     try:
         # ps() will list running models. If it fails, the daemon is unreachable.
-        client.ps()
+        ollama_client.ps()
         return True
     except Exception:
         error_log("Teacher is not present (Ollama server not found).")
@@ -47,28 +69,46 @@ Extract the most important facts from the following text:
 TEXT:
 {text_chunk}
 """
-    try:
-        with teacher_lock:
-            response = client.generate(
-                model=MODEL_NAME,
-                prompt=prompt,
-                stream=False,
-                options={
-                    "temperature": 0.1,
-                },
+    result = ""
+    used_gemini = False
+
+    # 1. Try Gemini (High-Speed Cloud)
+    if gemini_client:
+        try:
+            # Note: We do NOT lock Gemini. The cloud handles concurrent connections perfectly,
+            # allowing maximum parallel PDF ingestion.
+            response = gemini_client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt,
             )
-        result = response.get("response", "")
+            result = response.text
+            used_gemini = True
+        except Exception as e:
+            error_log(f"Gemini translation failed, falling back to Ollama: {e}")
 
-        quads = []
-        for line in result.split("\n"):
-            line = line.strip()
-            if line.startswith("$") and line.endswith("$") and line.count("|") >= 3:
-                quads.append(line)
-        return quads
+    # 2. Fallback to Ollama (Local)
+    if not used_gemini:
+        try:
+            with teacher_lock:
+                response = ollama_client.generate(
+                    model=MODEL_NAME,
+                    prompt=prompt,
+                    stream=False,
+                    options={
+                        "temperature": 0.1,
+                    },
+                )
+            result = response.get("response", "")
+        except Exception as e:
+            error_log(f"Failed to communicate with local Teacher during translation: {e}")
+            return []
 
-    except Exception as e:
-        error_log(f"Failed to communicate with Teacher during translation: {e}")
-        return []
+    quads = []
+    for line in result.split("\n"):
+        line = line.strip()
+        if line.startswith("$") and line.endswith("$") and line.count("|") >= 3:
+            quads.append(line)
+    return quads
 
 
 def vocalize(context_facts: list[str], user_input: str) -> str:
@@ -91,7 +131,7 @@ USER INPUT:
 """
     try:
         with teacher_lock:
-            response = client.generate(
+            response = ollama_client.generate(
                 model=MODEL_NAME,
                 prompt=prompt,
                 stream=False,

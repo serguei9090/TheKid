@@ -1,6 +1,6 @@
 {
     "action": "ingest_file",
-    "goal": "Read Personality PDF to establish identity",
+    "goal": "Autonomous learning of personality.md",
     "target_file": "personality.md",
     "completed": true
 }
