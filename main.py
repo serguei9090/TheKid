@@ -1,5 +1,6 @@
 import json
 import os
+import socket
 import threading
 import time
 
@@ -123,6 +124,58 @@ def execute_dream_phase(engine: KidEngine):
         return True
 
     engine.fuse_synonyms(teacher_verify_cb=auto_verify_merger)
+
+    # 5. Adjudicate Contradictions (Phase 10: Truth Verification)
+    adjudicate_contradictions(engine)
+
+
+def adjudicate_contradictions(engine: KidEngine):
+    """
+    Automated Truth adjudication. Finds contradictory nodes
+    and asks the Teacher to resolve the tie.
+    """
+    contradictions = engine.find_contradictions()
+    if not contradictions:
+        return
+
+    from core.teacher import adjudicate_facts
+
+    for rid1, rid2, sub, rel, obj1, obj2, ctx in contradictions:
+        trace_log(
+            "DISSONANCE", f"Contradiction found: {sub} {rel} {obj1} vs {obj2}", color="YELLOW"
+        )
+
+        fact_a = f"${sub} | {rel} | {obj1} | {ctx}$"
+        fact_b = f"${sub} | {rel} | {obj2} | {ctx}$"
+
+        decision = adjudicate_facts(fact_a, fact_b)
+        winner = decision.get("winner", "BOTH")
+        reasoning = decision.get("reasoning", "")
+        corrected = decision.get("corrected_quadruplet")
+
+        if winner == "A":
+            engine.cursor.execute(
+                "UPDATE quadruplets SET strength = MIN(2.0, strength+0.1) WHERE rowid = ?", (rid1,)
+            )
+            engine.cursor.execute(
+                "UPDATE quadruplets SET strength = strength * 0.1 WHERE rowid = ?", (rid2,)
+            )
+        elif winner == "B":
+            engine.cursor.execute(
+                "UPDATE quadruplets SET strength = MIN(2.0, strength+0.1) WHERE rowid = ?", (rid2,)
+            )
+            engine.cursor.execute(
+                "UPDATE quadruplets SET strength = strength * 0.1 WHERE rowid = ?", (rid1,)
+            )
+        elif winner == "NEITHER":
+            engine.cursor.execute("DELETE FROM quadruplets WHERE rowid IN (?, ?)", (rid1, rid2))
+
+        if corrected:
+            engine.store_quadruplet(corrected)
+
+        trace_log("ADJUDICATION", f"Winner: {winner}. Reasoning: {reasoning}", color="CYAN")
+
+    engine.conn.commit()
 
 
 def get_user_context(user_input: str) -> str:
@@ -252,11 +305,29 @@ def execute_worker_phase(engine: KidEngine):
                 keywords.extend(["is_named", "identity", "am", "name"])
 
             facts = engine.query_brain_cra(keywords, current_situation)
-            if facts:
-                trace_log("FOUND EXACT FACTS", str(facts), color="GREEN")
-                trace_log("ALGORITHMIC VOCAL CORDS", f"Synthesizing {len(facts)} internal facts.")
-                response = generate_sentence(facts)
-                print(f"THE KID: {response}")
+
+            # --- PHASE 10: CORRECTION DETECTION ---
+            corrections = ["no", "wrong", "incorrect", "false", "that is not true"]
+            if any(user_input.lower().startswith(c) for c in corrections):
+                trace_log(
+                    "FEEDBACK",
+                    "User reported an error. Back-propagating truth values...",
+                    color="RED",
+                )
+                engine.backpropagate_feedback(correct=False)
+                print("THE KID: I am sorry. I have adjusted my memory based on your correction.")
+                # After a correction, we ask the teacher to explain why or provide the truth
+                needs_teacher = True
+            else:
+                if facts:
+                    trace_log("FOUND EXACT FACTS", str(facts), color="GREEN")
+                    trace_log(
+                        "ALGORITHMIC VOCAL CORDS", f"Synthesizing {len(facts)} internal facts."
+                    )
+                    response = generate_sentence(facts)
+                    print(f"THE KID: {response}")
+                    # Reinforce the fact we just told the user (implicit positive feedback)
+                    engine.backpropagate_feedback(correct=True)
 
             needs_teacher = False
             if not facts:
@@ -317,6 +388,95 @@ def execute_worker_phase(engine: KidEngine):
             error_log(f"Worker phase encountered an error: {e}")
 
 
+def execute_server_worker(engine: KidEngine, port: int = 5050):
+    """
+    Acts as the Neural Hub. Listens for connections from chat_terminal.py.
+    """
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        server.bind(("0.0.0.0", port))
+        server.listen(5)
+        trace_log("NEURAL HUB", f"Kid Server active on port {port}. Use chat_terminal.py to connect.", color="MAGENTA")
+    except Exception as e:
+        error_log(f"Failed to bind Neural Hub: {e}")
+        return
+
+    while True:
+        client, _ = server.accept()
+        # Handle each client in a short-lived thread or sequentially if low load
+        threading.Thread(target=handle_client_request, args=(client, engine), daemon=True).start()
+
+
+def handle_client_request(client, engine: KidEngine):
+    """Processes a single interaction from the chat client."""
+    try:
+        data = client.recv(4096).decode("utf-8")
+        if not data:
+            client.close()
+            return
+
+        user_input = data.strip()
+        trace_log("SEARCHING", f"Processing Neural Request: '{user_input}'", color="CYAN")
+
+        # --- PHASE 12: SHUTDOWN COMMAND ---
+        if user_input.lower() in ["shutdown", "shutdown_server", "terminate_brain"]:
+            client.send("SYSTEM: Brain server shutting down...".encode("utf-8"))
+            client.close()
+            trace_log("SYSTEM", "Remote shutdown command received. Closing...", color="RED")
+            os._exit(0)
+
+        # 1. Extraction & Context
+        stop_words = {"are", "is", "the", "a", "an", "am", "of", "to", "in", "it", "that", "this", "my", "your", "for", "do", "how", "what", "where", "when", "why", "you"}
+        raw_kws = [kw for kw in user_input.replace("?", "").replace(".", "").split() if len(kw) > 0]
+        keywords = [kw for kw in raw_kws if kw.lower() not in stop_words]
+        if not keywords and raw_kws: keywords = raw_kws
+        
+        current_situation = get_user_context(user_input)
+        if current_situation == "First Meeting":
+            keywords.extend(["is_named", "identity", "am", "name"])
+
+        # 2. Brain Retrieval (CRA Math)
+        facts = engine.query_brain_cra(keywords, current_situation)
+        
+        final_response = ""
+        needs_teacher = False
+
+        # 3. Logic & Back-Prop
+        corrections = ["no", "wrong", "incorrect", "false", "that is not true"]
+        if any(user_input.lower().startswith(c) for c in corrections):
+            engine.backpropagate_feedback(correct=False)
+            final_response = "THE KID: I am sorry. I have adjusted my memory based on your correction."
+            needs_teacher = True
+        else:
+            if facts:
+                response_text = generate_sentence(facts)
+                final_response = f"THE KID: {response_text}"
+                engine.backpropagate_feedback(correct=True)
+            else:
+                final_response = "THE KID: I don't know that yet, let me ask my Teacher."
+                needs_teacher = True
+
+        # 4. Teacher Fallback (Background/Proactive)
+        if needs_teacher:
+            # We return the initial "I don't know" immediately, and let the teacher work in background
+            # For a better UI, we can wait 1-2 seconds for a teacher summary if facts were empty
+            if not facts:
+                prompt = f"Provide a concise answer and quadruplets for: '{user_input}'"
+                from core.teacher import MODEL_NAME, ollama_client, teacher_lock
+                with teacher_lock:
+                    resp = ollama_client.generate(model=MODEL_NAME, prompt=prompt, stream=False)
+                teacher_text = resp.get("response", "").split("$")[0].strip()
+                final_response = f"TEACHER: {teacher_text}"
+
+        client.send(final_response.encode("utf-8"))
+        client.close()
+
+    except Exception as e:
+        error_log(f"Handle client failed: {e}")
+        client.close()
+
+
 def continuous_learning_loop():
     """Runs continuously in the background to handle library drops and math logic."""
     # Isolated Engine instance for parallel SQLite execution via WAL mode
@@ -356,9 +516,9 @@ def main_loop():
     learning_thread = threading.Thread(target=continuous_learning_loop, daemon=True)
     learning_thread.start()
 
-    # Launch Foreground logic (Speaking)
+    # Launch Foreground logic (Vocal Interface Server)
     foreground_engine = KidEngine()
-    execute_worker_phase(foreground_engine)
+    execute_server_worker(foreground_engine)
 
 
 if __name__ == "__main__":

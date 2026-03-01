@@ -144,3 +144,40 @@ USER INPUT:
     except Exception as e:
         error_log(f"Failed to communicate with Teacher during vocalization: {e}")
         return "Error: Could not speak due to Teacher unavailability."
+
+
+def adjudicate_facts(fact_a: str, fact_b: str) -> dict:
+    """
+    Uses the Teacher to resolve contradictions between two facts.
+    Returns a dict with 'winner' (A, B, or BOTH), 'reasoning', and 'corrected_quadruplet'.
+    """
+    if not is_teacher_present():
+        return {"winner": "BOTH", "reasoning": "Teacher absent.", "corrected_quadruplet": None}
+
+    prompt = f"""You are a logical adjudicator. Two conflicting facts have been found in a knowledge base.
+FACT A: {fact_a}
+FACT B: {fact_b}
+
+Analyze which fact is more likely to be true for a Grade 1 level understanding of the world.
+Respond in JSON format:
+{{
+  "winner": "A" or "B" or "NEITHER" or "BOTH",
+  "reasoning": "brief explanation",
+  "corrected_quadruplet": "$Subject | Relation | Object | Context$" or null
+}}
+"""
+    try:
+        with teacher_lock:
+            response = ollama_client.generate(
+                model=MODEL_NAME,
+                prompt=prompt,
+                format="json",
+                stream=False,
+                options={"temperature": 0.1},
+            )
+        import json
+
+        return json.loads(response.get("response", "{}"))
+    except Exception as e:
+        error_log(f"Adjudication failed: {e}")
+        return {"winner": "BOTH", "reasoning": str(e), "corrected_quadruplet": None}

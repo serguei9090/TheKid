@@ -59,6 +59,13 @@ class KidEngine:
                 status TEXT
             )
         """)
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                user_name TEXT PRIMARY KEY,
+                last_fact_id INTEGER,
+                last_interaction_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         self.conn.commit()
 
     def hash_file(self, file_path: str) -> str:
@@ -257,7 +264,55 @@ class KidEngine:
                 )
                 formatted.append(f"${s} | {r} | {o} | {c}$")
 
+                # Track the last spoken fact ID for this user (default 'User')
+                self.cursor.execute(
+                    "INSERT OR REPLACE INTO sessions (user_name, last_fact_id) VALUES ('User', (SELECT rowid FROM quadruplets WHERE subject=? AND relation=? AND object=? AND context=?))",
+                    (s, r, o, c),
+                )
+        self.conn.commit()
+
         return formatted
+
+    def backpropagate_feedback(self, correct: bool):
+        """
+        Adjusts fact strength based on user feedback.
+        If correct=False, we lower the strength and truth_value.
+        """
+        self.cursor.execute("SELECT last_fact_id FROM sessions WHERE user_name = 'User'")
+        row = self.cursor.fetchone()
+        if not row or not row[0]:
+            return
+
+        fact_id = row[0]
+        if correct:
+            self.cursor.execute(
+                "UPDATE quadruplets SET strength = MIN(2.0, strength + 0.2), truth_value = MIN(1.0, truth_value + 0.1) WHERE rowid = ?",
+                (fact_id,),
+            )
+        else:
+            self.cursor.execute(
+                "UPDATE quadruplets SET strength = strength * 0.5, truth_value = truth_value * 0.5 WHERE rowid = ?",
+                (fact_id,),
+            )
+            # Check for deletion
+            self.cursor.execute(
+                "DELETE FROM quadruplets WHERE rowid = ? AND strength < 0.1", (fact_id,)
+            )
+        self.conn.commit()
+
+    def find_contradictions(self) -> List[tuple]:
+        """
+        Finds quadruplets with the same subject and relation but different objects.
+        Returns a list of pairs (rowid1, rowid2).
+        """
+        self.cursor.execute("""
+            SELECT a.rowid, b.rowid, a.subject, a.relation, a.object, b.object, a.context
+            FROM quadruplets a
+            JOIN quadruplets b ON a.subject = b.subject AND a.relation = b.relation 
+            AND a.object != b.object AND a.context = b.context
+            WHERE a.rowid < b.rowid
+        """)
+        return self.cursor.fetchall()
 
     def update_link_strengths(self):
         """D. Relational Link Strength calculation."""
